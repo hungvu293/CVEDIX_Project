@@ -1,9 +1,17 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(Camera)
+project(yolov8)
 
-find_package(OpenCV REQUIRED)
+find_package(OpenCV REQUIRED)   
 
-add_executable(camera camera.cpp)
+set(SOURCES source/yolov8.cc)
 
-target_link_libraries(camera ${OpenCV_LIBS})
+set(RKNN_LIBS ${OpenCV_LIBS} /usr/local/lib/librknnrt.so)
+
+include_directories(include ${OpenCV_INCLUDE_DIRS})
+
+add_executable(yolov8 ${SOURCES})
+
+target_link_libraries(yolov8 ${RKNN_LIBS})
+
+
