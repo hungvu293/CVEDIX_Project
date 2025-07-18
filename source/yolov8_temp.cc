@@ -1,33 +1,86 @@
-#include "yolov8.h"
-
-#include <fstream>
-#include <iostream>
 #include <stdio.h>
-
-#include <cstdlib> 
+#include <stdlib.h>
+#include <string.h>
+#include <iostream>
+#include <fstream>
+#include <cstdlib>                  // for malloc and free
+#include "opencv2/opencv.hpp"
+#include "opencv2/highgui.hpp"
+#include "rknn_api.h"
 
 #include <set>
 #include <vector>
-#include <string.h>
 
-YoloV8::YoloV8() : app_ctx(nullptr), od_results(nullptr) {
-    app_ctx = new rknn_app_context_t;
-    memset(app_ctx, 0, sizeof(rknn_app_context_t));
-    od_results = new object_detect_result_list;
-    memset(od_results, 0x00, sizeof(object_detect_result_list));
+#define OBJ_NAME_MAX_SIZE 64
+#define OBJ_NUMB_MAX_SIZE 128
+#define OBJ_CLASS_NUM 80
+#define NMS_THRESH 0.45
+#define BOX_THRESH 0.1
+
+typedef struct {
+    int left;
+    int top;
+    int right;
+    int bottom;
+} image_rect_t;
+
+typedef struct {
+    image_rect_t box;
+    float prop;
+    int cls_id;
+} object_detect_result;
+
+typedef struct {
+    int id;
+    int count;
+    object_detect_result results[OBJ_NUMB_MAX_SIZE];
+} object_detect_result_list;
+
+typedef struct {
+    rknn_context rknn_ctx;
+    rknn_input_output_num io_num;
+    rknn_tensor_attr* input_attrs;
+    rknn_tensor_attr* output_attrs;
+    int model_channel;
+    int model_width;
+    int model_height;
+    bool is_quant;
+} rknn_app_context_t;
+
+static void dump_tensor_attr(rknn_tensor_attr* attr);
+int read_data_from_file(const char *path, char **out_data);
+int init_model(const char* model_path, rknn_app_context_t *app_ctx);
+int inference_model(rknn_app_context_t *app_ctx, cv::Mat *orig_img_ptr, object_detect_result_list *od_results);
+int postprocess(rknn_app_context_t *app_ctx, void *outputs, float scale_w, float scale_h, float conf_threshold, float nms_threshold, object_detect_result_list *od_results);
+static int process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,
+                      int8_t *score_tensor, int32_t score_zp, float score_scale,
+                      int8_t *score_sum_tensor, int32_t score_sum_zp, float score_sum_scale,
+                      int grid_h, int grid_w, int stride, int dfl_len,
+                      std::vector<float> &boxes,
+                      std::vector<float> &objProbs,
+                      std::vector<int> &classId,
+                      float threshold);
+inline static int clamp(float val, int min, int max) { return val > min ? (val < max ? val : max) : min; }
+static int8_t qnt_f32_to_affine(float f32, int32_t zp, float scale);
+static float deqnt_affine_to_f32(int8_t qnt, int32_t zp, float scale);
+static void compute_dfl(float* tensor, int dfl_len, float* box);
+static int nms(int validCount, std::vector<float> &outputLocations, std::vector<int> classIds, std::vector<int> &order,
+               int filterId, float threshold);
+static float CalculateOverlap(float xmin0, float ymin0, float xmax0, float ymax0, float xmin1, float ymin1, float xmax1,
+                              float ymax1);
+static int quick_sort_indice_inverse(std::vector<float> &input, int left, int right, std::vector<int> &indices);
+int release_yolov8_model(rknn_app_context_t *app_ctx);
+
+static void dump_tensor_attr(rknn_tensor_attr* attr)
+{
+  printf("\tindex=%d, name=%s, \n\t\tn_dims=%d, dims=[%d, %d, %d, %d], \n\t\tn_elems=%d, size=%d, fmt=%s, \n\t\ttype=%s, qnt_type=%s, "
+         "zp=%d, scale=%f\n",
+         attr->index, attr->name, attr->n_dims, attr->dims[0], attr->dims[1], attr->dims[2], attr->dims[3],
+         attr->n_elems, attr->size, get_format_string(attr->fmt), get_type_string(attr->type),
+         get_qnt_type_string(attr->qnt_type), attr->zp, attr->scale);
 }
-YoloV8::~YoloV8() {
-    release();
-    if (app_ctx) {
-        delete app_ctx;
-        app_ctx = nullptr;
-    }
-    if (od_results) {
-        delete od_results;
-        od_results = nullptr;
-    }
-}
-int YoloV8::read_data_from_file(const char *path, char **out_data)
+
+int read_data_from_file(const char *path, char **out_data)
 {
     FILE *fp = fopen(path, "rb");
     if(fp == NULL) {
@@ -52,16 +105,7 @@ int YoloV8::read_data_from_file(const char *path, char **out_data)
     return file_size;
 }
 
-void YoloV8::dump_tensor_attr(rknn_tensor_attr* attr)
-{
-  printf("\tindex=%d, name=%s, \n\t\tn_dims=%d, dims=[%d, %d, %d, %d], \n\t\tn_elems=%d, size=%d, fmt=%s, \n\t\ttype=%s, qnt_type=%s, "
-         "zp=%d, scale=%f\n",
-         attr->index, attr->name, attr->n_dims, attr->dims[0], attr->dims[1], attr->dims[2], attr->dims[3],
-         attr->n_elems, attr->size, get_format_string(attr->fmt), get_type_string(attr->type),
-         get_qnt_type_string(attr->qnt_type), attr->zp, attr->scale);
-}
-
-int YoloV8::init(const char* model_path)
+int init_model(const char* model_path, rknn_app_context_t *app_ctx)
 {
     int ret;
     int model_len = 0;
@@ -165,7 +209,7 @@ int YoloV8::init(const char* model_path)
     return 0;
 }
 
-int YoloV8::run(cv::Mat& orig_img)
+int inference_model(rknn_app_context_t *app_ctx, cv::Mat *orig_img, object_detect_result_list *od_results)
 {
     int ret;
     // Init inputs 
@@ -183,7 +227,7 @@ int YoloV8::run(cv::Mat& orig_img)
 
     // Preprocess and set inputs
     cv::Mat img;
-    cv::cvtColor(orig_img, img, cv::COLOR_BGR2RGB);
+    cv::cvtColor(*orig_img, img, cv::COLOR_BGR2RGB);
     int img_width  = img.cols;
     int img_height = img.rows;
     // TODO: Use letter box to keep aspect ratio
@@ -228,14 +272,14 @@ int YoloV8::run(cv::Mat& orig_img)
     float scale_h = (float)app_ctx->model_height / img_height;
     const float nms_threshold = NMS_THRESH;
     const float conf_threshold = BOX_THRESH;
-    postprocess(outputs, scale_w, scale_h, conf_threshold, nms_threshold);
+    postprocess(app_ctx, outputs, scale_w, scale_h, conf_threshold, nms_threshold, od_results);
 
     rknn_outputs_release(app_ctx->rknn_ctx, app_ctx->io_num.n_output, outputs);
 
     return 0;
 }
 
-int YoloV8::postprocess(rknn_output* outputs, float scale_w, float scale_h, float conf_threshold, float nms_threshold)
+int postprocess(rknn_app_context_t *app_ctx, void *outputs, float scale_w, float scale_h, float conf_threshold, float nms_threshold, object_detect_result_list *od_results)
 {
     rknn_output *_outputs = (rknn_output *)outputs;
 
@@ -325,64 +369,11 @@ int YoloV8::postprocess(rknn_output* outputs, float scale_w, float scale_h, floa
         od_results->results[last_count].box.bottom = (int)(clamp(y2, 0, model_in_h) / scale_h);
         od_results->results[last_count].prop = obj_conf;
         od_results->results[last_count].cls_id = id;
-        const char* label = labels[id];
-        strncpy(od_results->results[last_count].name, label, OBJ_NAME_MAX_SIZE);
         last_count++;
     }
     od_results->count = last_count;
     return 0;
 }
-
-int YoloV8::draw(cv::Mat& orig_img)
-{
-    char text[256];
-    for (int i = 0; i < od_results->count; i++)
-    {
-        object_detect_result *det_result = &(od_results->results[i]);
-        printf("%s, %d @ (%d %d %d %d) %.3f\n", det_result->name, det_result->cls_id,
-            det_result->box.left, det_result->box.top,
-            det_result->box.right, det_result->box.bottom,
-            det_result->prop);
-        int x1 = det_result->box.left;
-        int y1 = det_result->box.top;
-        int x2 = det_result->box.right;
-        int y2 = det_result->box.bottom;
-        cv::rectangle(orig_img, cv::Point(x1, y1), cv::Point(x2, y2),cv::Scalar(255, 0, 0));
-        int baseLine = 0;
-        sprintf(text, "%s %.1f%%", det_result->name, det_result->prop * 100);
-        cv::Size label_size = cv::getTextSize(text, cv::FONT_HERSHEY_SIMPLEX, 0.5, 1, &baseLine);
-        int x = x1;
-        int y = y1 - label_size.height - baseLine;
-        if (y < 0) y = 0;
-        if (x + label_size.width > orig_img.cols) x = orig_img.cols - label_size.width;
-        cv::rectangle(orig_img, cv::Rect(cv::Point(x, y), cv::Size(label_size.width, label_size.height + baseLine)), cv::Scalar(255, 255, 255), -1);
-        cv::putText(orig_img, text, cv::Point(x, y + label_size.height), cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));
-
-    }
-    return 0;
-}
-
-
-int YoloV8::release()
-{
-    if (app_ctx->input_attrs != NULL)
-    {
-        free(app_ctx->input_attrs);
-        app_ctx->input_attrs = NULL;
-    }
-    if (app_ctx->output_attrs != NULL)
-    {
-        free(app_ctx->output_attrs);
-        app_ctx->output_attrs = NULL;
-    }
-    if (app_ctx->rknn_ctx != 0)
-    {
-        rknn_destroy(app_ctx->rknn_ctx);
-        app_ctx->rknn_ctx = 0;
-    }
-    return 0;
-}
-
 static int process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,
                       int8_t *score_tensor, int32_t score_zp, float score_scale,
                       int8_t *score_sum_tensor, int32_t score_sum_zp, float score_sum_scale,
@@ -566,3 +557,89 @@ static int quick_sort_indice_inverse(std::vector<float> &input, int left, int ri
     return low;
 }
 
+
+
+int release_yolov8_model(rknn_app_context_t *app_ctx)
+{
+    if (app_ctx->input_attrs != NULL)
+    {
+        free(app_ctx->input_attrs);
+        app_ctx->input_attrs = NULL;
+    }
+    if (app_ctx->output_attrs != NULL)
+    {
+        free(app_ctx->output_attrs);
+        app_ctx->output_attrs = NULL;
+    }
+    if (app_ctx->rknn_ctx != 0)
+    {
+        rknn_destroy(app_ctx->rknn_ctx);
+        app_ctx->rknn_ctx = 0;
+    }
+    return 0;
+}
+
+int main() {
+    const char model_path[] = "../model/yolov8.rknn";
+    const char img_path[] = "../busstop.jpg";
+    
+    // Init runtime context
+    int ret;
+    rknn_app_context_t rknn_app_ctx;
+    memset(&rknn_app_ctx, 0, sizeof(rknn_app_context_t));
+    cv::Mat orig_img;
+    ret = init_model(model_path, &rknn_app_ctx);
+    if (ret != 0)
+    {
+        printf("init_yolov8_model fail! ret=%d model_path=%s\n", ret, model_path);
+        goto out;
+    }
+
+    // Input
+    orig_img=cv::imread(img_path, 1);
+    if (orig_img.empty())
+    {
+        printf("Error grabbing img\n");
+        goto out;
+    }
+    
+    // Output
+    object_detect_result_list od_results;
+    memset(&od_results, 0x00, sizeof(object_detect_result_list));
+    
+    //Inference
+    ret = inference_model(&rknn_app_ctx, &orig_img, &od_results);
+    if (ret != 0)
+    {
+        printf("inference fail\n");
+        goto out;
+    }
+
+    char text[256];
+
+    for (int i = 0; i < od_results.count; i++)
+    {
+        object_detect_result *det_result = &(od_results.results[i]);
+        printf("%d @ (%d %d %d %d) %.3f\n", det_result->cls_id,
+               det_result->box.left, det_result->box.top,
+               det_result->box.right, det_result->box.bottom,
+               det_result->prop);
+        int x1 = det_result->box.left;
+        int y1 = det_result->box.top;
+        int x2 = det_result->box.right;
+        int y2 = det_result->box.bottom;
+        cv::rectangle(orig_img, cv::Point(x1, y1), cv::Point(x2, y2),cv::Scalar(255, 0, 0));
+    }
+    
+    // imshow("Radxa zero 3W - 1,8 GHz - 4 Mb RAM", orig_img);
+    // char esc = cv::waitKey(5);
+    // if(esc == 27) break;
+    imwrite("../out.jpg", orig_img);
+out:
+    ret = release_yolov8_model(&rknn_app_ctx);
+    if (ret != 0)
+    {
+        printf("release_yolov8_model fail! ret=%d\n", ret);
+    }
+    return 0;
+}

@@ -1,17 +1,33 @@
 cmake_minimum_required(VERSION 3.10)
 
-project(yolov8)
+project(inference)
 
 find_package(OpenCV REQUIRED)   
 
-set(SOURCES source/yolov8.cc)
+include_directories(
+    ${CMAKE_CURRENT_SOURCE_DIR}/include
+    ${OpenCV_INCLUDE_DIRS}
+)
 
-set(RKNN_LIBS ${OpenCV_LIBS} /usr/local/lib/librknnrt.so)
+set(YOLOV8_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/source/yolov8.cc)
+set(MAIN_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/main.cc)
 
-include_directories(include ${OpenCV_INCLUDE_DIRS})
+set(RKNN_RUNTIME_LIB /usr/local/lib/librknnrt.so)
 
-add_executable(yolov8 ${SOURCES})
+add_library(yolov8_lib STATIC ${YOLOV8_SOURCE})
 
-target_link_libraries(yolov8 ${RKNN_LIBS})
+target_link_libraries(yolov8_lib
+    ${OpenCV_LIBS}
+    ${RKNN_RUNTIME_LIB}
+)
+
+add_executable(inference ${MAIN_SOURCE})
+
+target_link_libraries(inference
+    yolov8_lib 
+)
+
+
+
 
 
