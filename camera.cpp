@@ -84,7 +84,7 @@ void inference(cv::Mat& raw_frame){}
 
 int main() {
     // std::string input = "/dev/video0";
-    std::string input = "rtsp://103.147.186.175:8554/9L02DA3PAJ39B2F";
+    std::string input = "";
     cv::VideoCapture cap = init(input);
 
     std::thread source_t(source, std::ref(cap));
