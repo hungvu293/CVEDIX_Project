@@ -5,6 +5,7 @@
 class OSD {
 public:
     OSD();
+    void init_display();
     void show(cv::Mat& frame);
     void release();
     ~OSD();

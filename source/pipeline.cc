@@ -1,68 +1,18 @@
 #include <thread>
 #include <atomic>
 #include <iostream>
-#include <chrono>
+#include <string>
 
-#include <pipeline.h>
-#include <yolov8.h>
-#include <reader.h>
-#include <osd.h>
+#include <chrono>   // Để dùng std::chrono::system_clock::time_point
+#include <iomanip>  // Để dùng std::put_time
+#include <ctime>    // Để dùng std::time_t, std::localtime, std::gmtime
 
 
-template<typename T>
-threadsafe_queue<T>::threadsafe_queue() {}
-
-template<typename T>
-void threadsafe_queue<T>::wait_and_pop(T& value) {
-    std::unique_lock<std::mutex> lk(mut);
-    data_cond.wait(lk, [this] {return !data_queue.empty();});
-    value = std::move(*data_queue.front()); 
-    data_queue.pop();
-}
-
-template<typename T>
-bool threadsafe_queue<T>::try_pop(T& value) {
-    std::lock_guard<std::mutex> lk(mut);
-    if (data_queue.empty())
-        return false;
-    value = std::move(*data_queue.front());
-    data_queue.pop();
-    return true;
-}
-
-template<typename T>
-std::shared_ptr<T> threadsafe_queue<T>::wait_and_pop() {
-    std::unique_lock<std::mutex> lk(mut);
-    data_cond.wait(lk, [this] {return !data_queue.empty();});
-    std::shared_ptr<T> res = data_queue.front(); 
-    data_queue.pop();
-    return res; 
-}
-
-template<typename T>
-std::shared_ptr<T> threadsafe_queue<T>::try_pop() {
-    std::lock_guard<std::mutex> lk(mut);
-    if (data_queue.empty())
-        return std::shared_ptr<T>(); 
-    std::shared_ptr<T> res = data_queue.front();
-    data_queue.pop();
-    return res;
-}
-
-template<typename T>
-void threadsafe_queue<T>::push(T new_value) {
-    std::shared_ptr<T> data = std::make_shared<T>(std::move(new_value));
-
-    std::lock_guard<std::mutex> lk(mut); 
-    data_queue.push(data);               
-    data_cond.notify_one();              
-}
-
-template<typename T>
-bool threadsafe_queue<T>::empty() const {
-    std::lock_guard<std::mutex> lk(mut); 
-    return data_queue.empty();
-}
+#include "pipeline.h"
+#include "data.h"
+#include "yolov8.h"
+#include "reader.h"
+#include "osd.h"
 
 void img_inference(const char* model_path, const char* img_path) {
     YoloV8 inference;
@@ -98,7 +48,7 @@ void img_inference(const char* model_path, const char* img_path) {
     imwrite("../out.jpg", orig_img);
 }
 
-void sync(const char* model_path, const char* input) {
+void sync(const char* model_path, std::string& input) {
     Reader reader;
     YoloV8 inference;
     OSD osd;
@@ -124,6 +74,7 @@ void sync(const char* model_path, const char* input) {
             break;
         }
         else {
+            auto start_inference_time = std::chrono::high_resolution_clock::now();
             ret = inference.run(orig_img);
             if (ret != 0) {
                 break;
@@ -132,6 +83,9 @@ void sync(const char* model_path, const char* input) {
             if (ret != 0) {
                 break;
             }
+            auto end_inference_time = std::chrono::high_resolution_clock::now();
+            std::chrono::duration<double, std::milli> inference_duration = end_inference_time - start_inference_time;
+            std::cout << "Model inference time: " << inference_duration.count() << " ms" << std::endl;
             // Draw FPS
             Tend = std::chrono::steady_clock::now();
             double duration_s = std::chrono::duration_cast<std::chrono::microseconds>(Tend - Tbegin).count() / 1000000.0;
@@ -156,17 +110,14 @@ out:
     return;
 }
 
-void read_thread_func(Reader& reader, threadsafe_queue<cv::Mat>& output_queue, std::atomic<bool>& running);
-void run_thread_func(YoloV8& inference, threadsafe_queue<cv::Mat>& input_queue, threadsafe_queue<cv::Mat>& output_queue, 
-std::atomic<bool>& running);
-void display_thread_func(OSD& osd, threadsafe_queue<cv::Mat>& input_queue, std::atomic<bool>& running);
-
-void async(const char* model_path, const char* input) {
+void async(const char* model_path, std::string& input) {
     Reader reader;
     YoloV8 inference;
     OSD osd;
-    threadsafe_queue<cv::Mat> reader_to_inference_queue;
-    threadsafe_queue<cv::Mat> inference_to_osd_queue;
+    // threadsafe_queue<cv::Mat> reader_to_inference_queue;
+    // threadsafe_queue<cv::Mat> inference_to_osd_queue;
+    threadsafe_queue<ReaderToInference> reader_to_inference_queue;
+    threadsafe_queue<InferenceToOSD> inference_to_osd_queue;
     std::atomic<bool> running = true;
 
     int ret;
@@ -178,6 +129,8 @@ void async(const char* model_path, const char* input) {
     ret = inference.init(model_path);
     if (ret != 0) {
     }
+    // osd.init_display();
+
     std::thread read_t(read_thread_func, std::ref(reader), std::ref(reader_to_inference_queue), std::ref(running));
     std::thread run_t(run_thread_func, std::ref(inference), std::ref(reader_to_inference_queue), std::ref(inference_to_osd_queue), std::ref(running));
     std::thread display_t(display_thread_func, std::ref(osd), std::ref(inference_to_osd_queue), std::ref(running));
@@ -188,19 +141,31 @@ void async(const char* model_path, const char* input) {
     return;
 }
 
-void read_thread_func(Reader& reader, threadsafe_queue<cv::Mat>& output_queue, std::atomic<bool>& running) {
+void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& output_queue, std::atomic<bool>& running) {
     cv::Mat frame;
+    std::chrono::system_clock::time_point capture_time;
+    int drop_count = 2;
+    int i = 0;
     while (running) {
+        i++;
         reader.read(frame);
-        if (frame.empty()) {
-            if (!reader.isInitialized) {
-                running = false;
-                break;
+        if (i % drop_count == 0) {
+            capture_time = std::chrono::system_clock::now();
+            // std::cout << "Reader: " << format_system_time_point(capture_time) << std::endl;
+            if (frame.empty()) {
+                if (!reader.isInitialized) {
+                    running = false;
+                    break;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(10)); 
+                continue;
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(10)); 
-            continue;
+            output_queue.push(ReaderToInference(frame, capture_time));
+            std::cout << "first: " << output_queue.size() << std::endl;
+
+            i = 0;
         }
-        output_queue.push(frame);
+
         if (!running) 
             break;
     }
@@ -209,17 +174,22 @@ void read_thread_func(Reader& reader, threadsafe_queue<cv::Mat>& output_queue, s
 }
 
 
-void run_thread_func(YoloV8& inference, threadsafe_queue<cv::Mat>& input_queue, threadsafe_queue<cv::Mat>& output_queue, 
+void run_thread_func(YoloV8& inference, threadsafe_queue<ReaderToInference>& input_queue, threadsafe_queue<InferenceToOSD>& output_queue, 
 std::atomic<bool>& running) {
+    ReaderToInference data;
     cv::Mat frame;
+    std::chrono::system_clock::time_point capture_time;
     int ret;
     while (running) {
-        std::shared_ptr<cv::Mat> frame_ptr = input_queue.try_pop();
-        if (!frame_ptr) {
+        std::shared_ptr<ReaderToInference> data_ptr = input_queue.try_pop();
+        if (!data_ptr) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        frame = *frame_ptr;
+        data = *data_ptr;
+        frame = data.origin_frame;
+        capture_time = data.capture_time;
+        auto start_inference_time = std::chrono::high_resolution_clock::now();
         ret = inference.run(frame);
         if (ret != 0) {
             break;
@@ -228,7 +198,12 @@ std::atomic<bool>& running) {
         if (ret != 0) {
             break;
         }
-        output_queue.push(frame);
+        auto end_inference_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> inference_duration = end_inference_time - start_inference_time;
+        std::cout << "Model inference time: " << inference_duration.count() << " ms" << std::endl;
+        output_queue.push(
+            InferenceToOSD(frame, capture_time)
+        );
         if (!running)
             break;
     }
@@ -236,15 +211,46 @@ std::atomic<bool>& running) {
     return;
 }
 
-void display_thread_func(OSD& osd, threadsafe_queue<cv::Mat>& input_queue, std::atomic<bool>& running) {
+void display_thread_func(OSD& osd, threadsafe_queue<InferenceToOSD>& input_queue, std::atomic<bool>& running) {
+    InferenceToOSD data;
     cv::Mat frame;
+    std::chrono::system_clock::time_point Tcapture, Tcurrent, Tbefore;
+    bool Tbefore_is_set = false;
     while (running) {
-        std::shared_ptr<cv::Mat> frame_ptr = input_queue.try_pop();
-        if (!frame_ptr) {
+        std::shared_ptr<InferenceToOSD> data_ptr = input_queue.try_pop();
+        if (!data_ptr) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        frame = *frame_ptr;
+        data = *data_ptr;
+        frame = data.processed_frame;
+        Tcapture = data.capture_time;
+
+        std::cout << "second: " << input_queue.size() << std::endl;
+
+        // std::cout << "Reader (from display): " << format_system_time_point(Tcapture) << std::endl;
+        Tcurrent = std::chrono::system_clock::now();
+        // std::cout << "Current display: " << format_system_time_point(Tcurrent) << std::endl;
+        double delay = std::chrono::duration_cast<std::chrono::microseconds>(Tcurrent - Tcapture).count() / 1000000.0;
+        std::stringstream delay_stream;
+        delay_stream << std::fixed << std::setprecision(2) << delay;
+        std::string delay_text = "Delay: " + delay_stream.str() + "s";
+        cv::putText(frame, delay_text, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 0), 2);
+
+        if (Tbefore_is_set) {
+            double duration_s = std::chrono::duration_cast<std::chrono::microseconds>(Tcurrent - Tbefore).count() / 1000000.0;
+            double fps = 1.0 / duration_s;
+            std::stringstream fps_stream;
+            fps_stream << std::fixed << std::setprecision(2) << fps;
+            std::string fps_text = "FPS: " + fps_stream.str(); 
+            cv::putText(frame, fps_text, cv::Point(10, 60), cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(0, 255, 0), 2);
+        }
+
+        Tbefore = std::chrono::system_clock::now();
+        if (!Tbefore_is_set)
+            Tbefore_is_set = true;
+
+            
         osd.show(frame);
         if (cv::waitKey(1) == 27) {
             running = false;

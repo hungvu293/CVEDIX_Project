@@ -339,10 +339,10 @@ int YoloV8::draw(cv::Mat& orig_img)
     for (int i = 0; i < od_results->count; i++)
     {
         object_detect_result *det_result = &(od_results->results[i]);
-        printf("%s, %d @ (%d %d %d %d) %.3f\n", det_result->name, det_result->cls_id,
-            det_result->box.left, det_result->box.top,
-            det_result->box.right, det_result->box.bottom,
-            det_result->prop);
+        // printf("%s, %d @ (%d %d %d %d) %.3f\n", det_result->name, det_result->cls_id,
+        //     det_result->box.left, det_result->box.top,
+        //     det_result->box.right, det_result->box.bottom,
+        //     det_result->prop);
         int x1 = det_result->box.left;
         int y1 = det_result->box.top;
         int x2 = det_result->box.right;
