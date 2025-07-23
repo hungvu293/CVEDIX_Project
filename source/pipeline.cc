@@ -11,6 +11,7 @@
 #include "pipeline.h"
 #include "data.h"
 #include "yolov8.h"
+#include "track.h"
 #include "reader.h"
 #include "osd.h"
 
@@ -51,9 +52,12 @@ void img_inference(const char* model_path, const char* img_path) {
 void sync(const char* model_path, std::string& input) {
     Reader reader;
     YoloV8 inference;
+    Tracking track(0, 50, 1, 0.22136877277096445, 1, "giou", 0.3941737016672115, true);
     OSD osd;
+
     int ret;
     cv::Mat orig_img;
+    std::vector<Detection> detections;
     std::chrono::steady_clock::time_point Tbegin, Tend;
     
     // Init
@@ -79,10 +83,14 @@ void sync(const char* model_path, std::string& input) {
             if (ret != 0) {
                 break;
             }
-            ret = inference.draw(orig_img);
-            if (ret != 0) {
-                break;
-            }
+            // ret = inference.draw(orig_img);
+            // if (ret != 0) {
+            //     break;
+            // }
+            // Track
+            detections = track.convert_output(inference.od_results);
+            track.run(orig_img, detections);
+
             auto end_inference_time = std::chrono::high_resolution_clock::now();
             std::chrono::duration<double, std::milli> inference_duration = end_inference_time - start_inference_time;
             std::cout << "Model inference time: " << inference_duration.count() << " ms" << std::endl;
@@ -144,7 +152,7 @@ void async(const char* model_path, std::string& input) {
 void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& output_queue, std::atomic<bool>& running) {
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
-    int drop_count = 4;
+    int drop_count = 2;
     int i = 0;
     while (running) {
         i++;
