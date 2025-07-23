@@ -144,7 +144,7 @@ void async(const char* model_path, std::string& input) {
 void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& output_queue, std::atomic<bool>& running) {
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
-    int drop_count = 2;
+    int drop_count = 4;
     int i = 0;
     while (running) {
         i++;
@@ -194,13 +194,16 @@ std::atomic<bool>& running) {
         if (ret != 0) {
             break;
         }
+        auto start_draw = std::chrono::high_resolution_clock::now();
         ret = inference.draw(frame);
         if (ret != 0) {
             break;
         }
         auto end_inference_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> inference_duration = end_inference_time - start_inference_time;
+        std::chrono::duration<double, std::milli> draw_duration = end_inference_time - start_draw;
         std::cout << "Model inference time: " << inference_duration.count() << " ms" << std::endl;
+        std::cout << "Model draw time: " << draw_duration.count() << " ms" << std::endl;
         output_queue.push(
             InferenceToOSD(frame, capture_time)
         );

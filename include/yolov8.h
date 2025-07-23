@@ -57,8 +57,13 @@ class YoloV8 {
 public:
     YoloV8();
     ~YoloV8();
+
     rknn_app_context_t* app_ctx;
     object_detect_result_list*  od_results;
+
+    rknn_input* inputs;
+    rknn_output* outputs;
+    
     int init(const char* model_path);
     int run(cv::Mat& orig_img);
     int draw(cv::Mat& orig_img);

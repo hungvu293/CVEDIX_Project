@@ -10,7 +10,9 @@
 #include <vector>
 #include <string.h>
 
-YoloV8::YoloV8() : app_ctx(nullptr), od_results(nullptr) {
+#include <chrono>
+
+YoloV8::YoloV8() : app_ctx(nullptr), od_results(nullptr), inputs(nullptr), outputs(nullptr) {
     app_ctx = new rknn_app_context_t;
     memset(app_ctx, 0, sizeof(rknn_app_context_t));
     od_results = new object_detect_result_list;
@@ -25,6 +27,14 @@ YoloV8::~YoloV8() {
     if (od_results) {
         delete od_results;
         od_results = nullptr;
+    }
+    if (inputs) {
+        delete inputs;
+        inputs = nullptr;
+    }
+    if (outputs) {
+        delete outputs;
+        outputs = nullptr;
     }
 }
 int YoloV8::read_data_from_file(const char *path, char **out_data)
@@ -162,51 +172,56 @@ int YoloV8::init(const char* model_path)
     printf("model input height=%d, width=%d, channel=%d\n",
            app_ctx->model_height, app_ctx->model_width, app_ctx->model_channel);
 
-    return 0;
-}
 
-int YoloV8::run(cv::Mat& orig_img)
-{
-    int ret;
-    // Init inputs 
-    rknn_input inputs[app_ctx->io_num.n_input];
-    memset(inputs, 0, sizeof(inputs));
-
-    // Init outputs
-    rknn_output outputs[app_ctx->io_num.n_output];
-    memset(outputs, 0, sizeof(outputs));
+    inputs = new rknn_input[app_ctx->io_num.n_input];
+    memset(inputs, 0, app_ctx->io_num.n_input * sizeof(rknn_input));
+    outputs = new rknn_output[app_ctx->io_num.n_output];
+    memset(outputs, 0, app_ctx->io_num.n_output * sizeof(rknn_output));
     for (int i = 0; i < app_ctx->io_num.n_output; i++)
     {
         outputs[i].index = i;
         outputs[i].want_float = (!app_ctx->is_quant);
     }
+    inputs[0].index = 0;
+    inputs[0].type = RKNN_TENSOR_UINT8;
+    inputs[0].fmt = RKNN_TENSOR_NHWC;
+    inputs[0].size = app_ctx->model_width * app_ctx->model_height * app_ctx->model_channel;
 
+    return 0;
+}
+
+int YoloV8::run(cv::Mat& orig_img)
+{
+    auto start = std::chrono::high_resolution_clock::now();
+    int ret;
     // Preprocess and set inputs
     cv::Mat img;
+    auto start_convert = std::chrono::high_resolution_clock::now();
     cv::cvtColor(orig_img, img, cv::COLOR_BGR2RGB);
+    auto end_convert = std::chrono::high_resolution_clock::now();
     int img_width  = img.cols;
     int img_height = img.rows;
+    auto start_resize = std::chrono::high_resolution_clock::now();
     // TODO: Use letter box to keep aspect ratio
     if (img_width != app_ctx->model_width || img_height != app_ctx->model_height)
     {
         cv::Mat resized_img;
         cv::resize(img, resized_img, cv::Size(app_ctx->model_width, app_ctx->model_height));
         inputs[0].buf = (void*)resized_img.data;
+        
     }
     else
     {
         inputs[0].buf = (void*)img.data;
     }
-    inputs[0].index = 0;
-    inputs[0].type = RKNN_TENSOR_UINT8;
-    inputs[0].fmt = RKNN_TENSOR_NHWC;
-    inputs[0].size = app_ctx->model_width * app_ctx->model_height * app_ctx->model_channel;
+    auto end_resize = std::chrono::high_resolution_clock::now();
     ret = rknn_inputs_set(app_ctx->rknn_ctx, app_ctx->io_num.n_input, inputs);
     if (ret < 0)
     {
         printf("rknn_input_set fail! ret=%d\n", ret);
         return -1;
     }
+    auto end_pre = std::chrono::high_resolution_clock::now();
 
     // Run
     ret = rknn_run(app_ctx->rknn_ctx, nullptr);
@@ -215,6 +230,7 @@ int YoloV8::run(cv::Mat& orig_img)
         printf("rknn_run fail! ret=%d\n", ret);
         return -1;
     }
+    auto end_run = std::chrono::high_resolution_clock::now();
 
     // Get output
     ret = rknn_outputs_get(app_ctx->rknn_ctx, app_ctx->io_num.n_output, outputs, NULL);
@@ -229,9 +245,21 @@ int YoloV8::run(cv::Mat& orig_img)
     const float nms_threshold = NMS_THRESH;
     const float conf_threshold = BOX_THRESH;
     postprocess(outputs, scale_w, scale_h, conf_threshold, nms_threshold);
-
     rknn_outputs_release(app_ctx->rknn_ctx, app_ctx->io_num.n_output, outputs);
 
+    auto end_post = std::chrono::high_resolution_clock::now();
+
+    std::chrono::duration<double, std::milli> pre_duration = end_pre - start;
+    std::chrono::duration<double, std::milli> convert_duration = end_convert - start_convert;
+    std::chrono::duration<double, std::milli> resize_duration = end_resize - start_resize;
+    std::chrono::duration<double, std::milli> run_duration = end_run - end_pre;
+    std::chrono::duration<double, std::milli> post_duration = end_post - end_run;
+
+    std::cout << "pre: " << pre_duration.count() << " ms" << std::endl;
+    std::cout << "convert: " << convert_duration.count() << " ms" << std::endl;
+    std::cout << "resize: " << resize_duration.count() << " ms" << std::endl;
+    std::cout << "run: " << run_duration.count() << " ms" << std::endl;
+    std::cout << "post: " << post_duration.count() << " ms" << std::endl;
     return 0;
 }
 
