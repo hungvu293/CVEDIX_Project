@@ -390,6 +390,19 @@ int YoloV8::draw(cv::Mat& orig_img)
     return 0;
 }
 
+void YoloV8::filter_class(const char* label) {
+    object_detect_result_list filtered_list;
+    filtered_list.count = 0;
+    for (int i = 0; i < od_results->count; i++) {
+        if (strcmp(od_results->results[i].name, label) == 0) {
+            filtered_list.results[filtered_list.count] = od_results->results[i];
+            filtered_list.count += 1;
+        }
+    }
+    *od_results = filtered_list;
+    return;
+}
+
 
 int YoloV8::release()
 {

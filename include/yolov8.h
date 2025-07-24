@@ -67,6 +67,7 @@ public:
     int init(const char* model_path);
     int run(cv::Mat& orig_img);
     int draw(cv::Mat& orig_img);
+    void filter_class(const char* label);
     int release();
 
 private:

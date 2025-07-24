@@ -18,10 +18,17 @@ void img_inference(const char* model_path, const char* input);
 void sync(const char* model_path, std::string& input);
 void async(const char* model_path, std::string& input);
 
-void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& output_queue, std::atomic<bool>& running);
-void run_thread_func(YoloV8& inference, threadsafe_queue<ReaderToInference>& input_queue, threadsafe_queue<InferenceToOSD>& output_queue, 
-std::atomic<bool>& running);
-void display_thread_func(OSD& osd, threadsafe_queue<InferenceToOSD>& input_queue, std::atomic<bool>& running);
-
+void read_thread_func(Reader& reader, 
+    threadsafe_queue<ReaderToInference>& output_queue, 
+    std::atomic<bool>& running);
+void inference_thread_func(YoloV8& inference, 
+    threadsafe_queue<ReaderToInference>& input_queue, threadsafe_queue<InferenceToTrack>& output_queue, 
+    std::atomic<bool>& running);
+void track_thread_func(Tracking& track, 
+    threadsafe_queue<InferenceToTrack>& input_queue, threadsafe_queue<TrackToOSD>& output_queue, 
+    std::atomic<bool>& running);
+void display_thread_func(OSD& osd, 
+    threadsafe_queue<TrackToOSD>& input_queue, 
+    std::atomic<bool>& running);
 #endif 
 

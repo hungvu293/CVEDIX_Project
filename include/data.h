@@ -10,6 +10,9 @@
 
 #include "opencv2/opencv.hpp"
 
+#include "yolov8.h"
+#include "track.h"
+
 template<typename T>
 class threadsafe_queue {
 private:
@@ -93,15 +96,23 @@ int threadsafe_queue<T>::size() {
 struct ReaderToInference {
     cv::Mat origin_frame;
     std::chrono::system_clock::time_point capture_time;
-    ReaderToInference(cv::Mat& frame, std::chrono::system_clock::time_point time) : origin_frame(frame.clone()), capture_time(time) {};
-    ReaderToInference(): origin_frame(), capture_time() {};
+    ReaderToInference(cv::Mat& frame, std::chrono::system_clock::time_point time) 
+        : origin_frame(frame.clone()), capture_time(time) {};
 };
 
-struct InferenceToOSD {
+struct InferenceToTrack {
+    cv::Mat origin_frame;
+    std::chrono::system_clock::time_point capture_time;
+    object_detect_result_list od_results;
+    InferenceToTrack(cv::Mat& frame, std::chrono::system_clock::time_point time, object_detect_result_list od_results) 
+        : origin_frame(frame.clone()), capture_time(time), od_results(od_results) {};
+};
+
+struct TrackToOSD {
     cv::Mat processed_frame;
     std::chrono::system_clock::time_point capture_time;
-    InferenceToOSD(cv::Mat& frame, std::chrono::system_clock::time_point time) : processed_frame(frame.clone()), capture_time(time) {};
-    InferenceToOSD(): processed_frame(), capture_time() {};
+    TrackToOSD(cv::Mat& frame, std::chrono::system_clock::time_point time) 
+        : processed_frame(frame.clone()), capture_time(time) {};
 };
 
 #endif 

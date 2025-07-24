@@ -14,6 +14,7 @@
 #include "track.h"
 #include "reader.h"
 #include "osd.h"
+#include "track.h"
 
 void img_inference(const char* model_path, const char* img_path) {
     YoloV8 inference;
@@ -83,6 +84,7 @@ void sync(const char* model_path, std::string& input) {
             if (ret != 0) {
                 break;
             }
+            inference.filter_class("person");
             // ret = inference.draw(orig_img);
             // if (ret != 0) {
             //     break;
@@ -121,30 +123,32 @@ out:
 void async(const char* model_path, std::string& input) {
     Reader reader;
     YoloV8 inference;
+    Tracking track;
     OSD osd;
-    // threadsafe_queue<cv::Mat> reader_to_inference_queue;
-    // threadsafe_queue<cv::Mat> inference_to_osd_queue;
+
     threadsafe_queue<ReaderToInference> reader_to_inference_queue;
-    threadsafe_queue<InferenceToOSD> inference_to_osd_queue;
+    threadsafe_queue<InferenceToTrack> inference_to_track_queue;
+    threadsafe_queue<TrackToOSD> track_to_osd_queue;
+
     std::atomic<bool> running = true;
 
     int ret;
     // Init
     ret = reader.init(input);
-    if (ret != 0) {
-    }
+    if (ret != 0) {}
 
     ret = inference.init(model_path);
-    if (ret != 0) {
-    }
+    if (ret != 0) {}
     // osd.init_display();
 
     std::thread read_t(read_thread_func, std::ref(reader), std::ref(reader_to_inference_queue), std::ref(running));
-    std::thread run_t(run_thread_func, std::ref(inference), std::ref(reader_to_inference_queue), std::ref(inference_to_osd_queue), std::ref(running));
-    std::thread display_t(display_thread_func, std::ref(osd), std::ref(inference_to_osd_queue), std::ref(running));
+    std::thread inference_t(inference_thread_func, std::ref(inference), std::ref(reader_to_inference_queue), std::ref(inference_to_track_queue), std::ref(running));
+    std::thread track_t(track_thread_func, std::ref(track), std::ref(inference_to_track_queue), std::ref(track_to_osd_queue), std::ref(running));
+    std::thread display_t(display_thread_func, std::ref(osd), std::ref(track_to_osd_queue), std::ref(running));
 
     read_t.join();
-    run_t.join();
+    inference_t.join();
+    track_t.join();
     display_t.join();
     return;
 }
@@ -152,14 +156,13 @@ void async(const char* model_path, std::string& input) {
 void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& output_queue, std::atomic<bool>& running) {
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
-    int drop_count = 2;
+    int drop_count = 4;
     int i = 0;
     while (running) {
         i++;
         reader.read(frame);
         if (i % drop_count == 0) {
             capture_time = std::chrono::system_clock::now();
-            // std::cout << "Reader: " << format_system_time_point(capture_time) << std::endl;
             if (frame.empty()) {
                 if (!reader.isInitialized) {
                     running = false;
@@ -169,7 +172,7 @@ void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& outpu
                 continue;
             }
             output_queue.push(ReaderToInference(frame, capture_time));
-            std::cout << "first: " << output_queue.size() << std::endl;
+            std::cout << "first queue: " << output_queue.size() << std::endl;
 
             i = 0;
         }
@@ -181,40 +184,37 @@ void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& outpu
         return;
 }
 
-
-void run_thread_func(YoloV8& inference, threadsafe_queue<ReaderToInference>& input_queue, threadsafe_queue<InferenceToOSD>& output_queue, 
+void inference_thread_func(YoloV8& inference, threadsafe_queue<ReaderToInference>& input_queue, threadsafe_queue<InferenceToTrack>& output_queue, 
 std::atomic<bool>& running) {
-    ReaderToInference data;
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
     int ret;
     while (running) {
+        auto start_inference_time = std::chrono::high_resolution_clock::now();
+        
         std::shared_ptr<ReaderToInference> data_ptr = input_queue.try_pop();
         if (!data_ptr) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        data = *data_ptr;
-        frame = data.origin_frame;
-        capture_time = data.capture_time;
-        auto start_inference_time = std::chrono::high_resolution_clock::now();
+        
+        frame = data_ptr->origin_frame;
+        capture_time = data_ptr->capture_time;
+        
         ret = inference.run(frame);
         if (ret != 0) {
             break;
         }
-        auto start_draw = std::chrono::high_resolution_clock::now();
-        ret = inference.draw(frame);
-        if (ret != 0) {
-            break;
-        }
+        inference.filter_class("person");
+
+        output_queue.push(
+            InferenceToTrack(frame, capture_time, *inference.od_results)
+        );
+        std::cout << "second queue: " << output_queue.size() << std::endl;
         auto end_inference_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> inference_duration = end_inference_time - start_inference_time;
-        std::chrono::duration<double, std::milli> draw_duration = end_inference_time - start_draw;
-        std::cout << "Model inference time: " << inference_duration.count() << " ms" << std::endl;
-        std::cout << "Model draw time: " << draw_duration.count() << " ms" << std::endl;
-        output_queue.push(
-            InferenceToOSD(frame, capture_time)
-        );
+        std::cout << "Inference time: " << inference_duration.count() << " ms" << std::endl;
+        
         if (!running)
             break;
     }
@@ -222,26 +222,62 @@ std::atomic<bool>& running) {
     return;
 }
 
-void display_thread_func(OSD& osd, threadsafe_queue<InferenceToOSD>& input_queue, std::atomic<bool>& running) {
-    InferenceToOSD data;
+void track_thread_func(Tracking& track, 
+threadsafe_queue<InferenceToTrack>& input_queue, threadsafe_queue<TrackToOSD>& output_queue, 
+std::atomic<bool>& running) {
     cv::Mat frame;
-    std::chrono::system_clock::time_point Tcapture, Tcurrent, Tbefore;
-    bool Tbefore_is_set = false;
+    std::chrono::system_clock::time_point capture_time;
+    object_detect_result_list od_results;
+    std::vector<Detection> detections;
+    std::vector<Eigen::RowVectorXf> res;
+    int ret;
     while (running) {
-        std::shared_ptr<InferenceToOSD> data_ptr = input_queue.try_pop();
+        auto start_track_time = std::chrono::high_resolution_clock::now();
+        
+        std::shared_ptr<InferenceToTrack> data_ptr = input_queue.try_pop();
         if (!data_ptr) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        data = *data_ptr;
-        frame = data.processed_frame;
-        Tcapture = data.capture_time;
+        
+        frame = data_ptr->origin_frame;
+        capture_time = data_ptr->capture_time;
+        od_results = data_ptr->od_results;
+        detections = track.convert_output(&od_results);
+        res = track.run(frame, detections);
+        track.draw_tracks(frame, res);
 
-        std::cout << "second: " << input_queue.size() << std::endl;
+        output_queue.push(
+            TrackToOSD(frame, capture_time)
+        );
+        std::cout << "third queue: " << output_queue.size() << std::endl;
+        
+        auto end_track_time = std::chrono::high_resolution_clock::now();
+        std::chrono::duration<double, std::milli> track_duration = end_track_time - start_track_time;
+        std::cout << "Track time: " << track_duration.count() << " ms" << std::endl;
+        if (!running)
+            break;
+    }
+    // track.release();
+    return;
+}
 
-        // std::cout << "Reader (from display): " << format_system_time_point(Tcapture) << std::endl;
+void display_thread_func(OSD& osd, threadsafe_queue<TrackToOSD>& input_queue, std::atomic<bool>& running) {
+    cv::Mat frame;
+    std::chrono::system_clock::time_point Tcapture, Tcurrent, Tbefore;
+    bool Tbefore_is_set = false;
+    while (running) {
+        
+        std::shared_ptr<TrackToOSD> data_ptr = input_queue.try_pop();
+        if (!data_ptr) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+        
+        frame = data_ptr->processed_frame;
+        Tcapture = data_ptr->capture_time;
+
         Tcurrent = std::chrono::system_clock::now();
-        // std::cout << "Current display: " << format_system_time_point(Tcurrent) << std::endl;
         double delay = std::chrono::duration_cast<std::chrono::microseconds>(Tcurrent - Tcapture).count() / 1000000.0;
         std::stringstream delay_stream;
         delay_stream << std::fixed << std::setprecision(2) << delay;
@@ -260,7 +296,6 @@ void display_thread_func(OSD& osd, threadsafe_queue<InferenceToOSD>& input_queue
         Tbefore = std::chrono::system_clock::now();
         if (!Tbefore_is_set)
             Tbefore_is_set = true;
-
             
         osd.show(frame);
         if (cv::waitKey(1) == 27) {
@@ -273,5 +308,4 @@ void display_thread_func(OSD& osd, threadsafe_queue<InferenceToOSD>& input_queue
     }
     osd.release();
     return;
-
 }

@@ -17,9 +17,8 @@ public:
              int delta_t_ = 3, std::string asso_func_ = "iou", float inertia_ = 0.2f, bool use_byte_ = false);
     ~Tracking();
     std::vector<Detection> convert_output(object_detect_result_list* od_results);
-    void run(cv::Mat& frame, std::vector<Detection>& output);
-    // int draw_tracks(cv::Mat& frame, std::vector<Detection>& output);
-    // int draw_detections(cv::Mat& frame, std::vector<Eigen::RowVectorXf>& res);
+    std::vector<Eigen::RowVectorXf> run(cv::Mat& frame, std::vector<Detection>& output);
+    void draw_tracks(cv::Mat& frame, std::vector<Eigen::RowVectorXf>& res);
 private:
     ocsort::OCSort oc_sort_tracker;
 };

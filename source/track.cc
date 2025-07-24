@@ -43,7 +43,11 @@ std::vector<Detection> Tracking::convert_output(object_detect_result_list* od_re
     return output;
 }
 
-void Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
+std::vector<Eigen::RowVectorXf> Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
+    if (output.empty()) {
+        return std::vector<Eigen::RowVectorXf>();
+    }
+    
     std::vector<std::vector<float>> data;
     cv::Rect box;
     for (int i = 0; i < output.size(); ++i) {
@@ -59,26 +63,21 @@ void Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
         row.push_back(detection.class_id);
 
         data.push_back(row);
-
-        if (!data.empty()) {
-            std::vector<Eigen::RowVectorXf> res = oc_sort_tracker.update(Vector2Matrix(data));
-
-            cv::rectangle(frame, box, cv::Scalar(0, 255, 0), 2);
-
-            std::string classString = detection.className + '(' + std::to_string(detection.confidence).substr(0, 4) + ')';
-            cv::putText(frame, classString, cv::Point(box.x + 5, box.y + box.height - 10), cv::FONT_HERSHEY_DUPLEX, 0.5, cv::Scalar(0, 255, 0), 1, 0);
-
-            for (auto j : res) {
-                int ID = int(j[4]);
-                int Class = int(j[5]);
-                float conf = j[6];
-                cv::putText(frame, cv::format("ID:%d", ID), cv::Point(j[0], j[1] - 5), 0, 0.5, cv::Scalar(0, 0, 255), 1, cv::LINE_AA);
-                cv::rectangle(frame, cv::Rect(j[0], j[1], j[2] - j[0] + 1, j[3] - j[1] + 1), cv::Scalar(0, 0, 255), 1);
-            }
-
-            data.clear();
-        }
     }
+    std::vector<Eigen::RowVectorXf> res = oc_sort_tracker.update(Vector2Matrix(data));
+    data.clear();
+
+    return res;
 }
 
-// int draw_tracks(cv::Mat& frame, std::vector<Eigen::RowVectorXf>& res) {}
+void Tracking::draw_tracks(cv::Mat& frame, std::vector<Eigen::RowVectorXf>& res) {
+    if (res.empty())
+        return;
+    for (auto j : res) {
+        int ID = int(j[4]);
+        int Class = int(j[5]);
+        float conf = j[6];
+        cv::putText(frame, cv::format("ID:%d", ID), cv::Point(j[0], j[1] - 5), 0, 0.5, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+        cv::rectangle(frame, cv::Rect(j[0], j[1], j[2] - j[0] + 1, j[3] - j[1] + 1), cv::Scalar(j(7), j(8), j(9)), 1);
+    }
+}
