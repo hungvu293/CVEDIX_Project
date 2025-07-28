@@ -3,6 +3,8 @@
 
 #include "opencv2/opencv.hpp"
 #include "rknn_api.h"
+#include "im2d.h"
+#include "rga.h"
 
 #define OBJ_NAME_MAX_SIZE 64
 #define OBJ_NUMB_MAX_SIZE 128
@@ -53,6 +55,11 @@ typedef struct {
     bool is_quant;
 } rknn_app_context_t;
 
+typedef struct {
+    rga_buffer_t src;
+    rga_buffer_t dst;
+} rga_context_t
+
 class YoloV8 {
 public:
     YoloV8();
@@ -63,6 +70,8 @@ public:
 
     rknn_input* inputs;
     rknn_output* outputs;
+
+    rga_context_t* rga_ctx;
     
     int init(const char* model_path);
     int run(cv::Mat& orig_img);
@@ -96,5 +105,7 @@ static int process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,
                       std::vector<float> &objProbs,
                       std::vector<int> &classId,
                       float threshold);
+
+int resize_rga(rga_buffer_t &src, rga_buffer_t &dst, const cv::Mat &image, cv::Mat &resized_image, const cv::Size &target_size);
 
 #endif

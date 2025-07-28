@@ -17,6 +17,8 @@ YoloV8::YoloV8() : app_ctx(nullptr), od_results(nullptr), inputs(nullptr), outpu
     memset(app_ctx, 0, sizeof(rknn_app_context_t));
     od_results = new object_detect_result_list;
     memset(od_results, 0x00, sizeof(object_detect_result_list));
+    rga_ctx = new rga_context_t;
+    memset(rga_ctx, 0, sizeof(rga_context_t));
 }
 YoloV8::~YoloV8() {
     release();
@@ -139,7 +141,6 @@ int YoloV8::init(const char* model_path)
     // Set to context
     app_ctx->rknn_ctx = ctx;
 
-    // TODO
     if (output_attrs[0].qnt_type == RKNN_TENSOR_QNT_AFFINE_ASYMMETRIC && output_attrs[0].type == RKNN_TENSOR_INT8)
     {
         app_ctx->is_quant = true;
@@ -195,26 +196,25 @@ int YoloV8::run(cv::Mat& orig_img)
     auto start = std::chrono::high_resolution_clock::now();
     int ret;
     // Preprocess and set inputs
-    cv::Mat img;
-    auto start_convert = std::chrono::high_resolution_clock::now();
-    cv::cvtColor(orig_img, img, cv::COLOR_BGR2RGB);
-    auto end_convert = std::chrono::high_resolution_clock::now();
     int img_width  = img.cols;
     int img_height = img.rows;
     auto start_resize = std::chrono::high_resolution_clock::now();
+    
     // TODO: Use letter box to keep aspect ratio
     if (img_width != app_ctx->model_width || img_height != app_ctx->model_height)
     {
-        cv::Mat resized_img;
-        cv::resize(img, resized_img, cv::Size(app_ctx->model_width, app_ctx->model_height));
-        inputs[0].buf = (void*)resized_img.data;
+        cv::Size target_size(app_ctx->model_width, app_ctx->model_height);
+        cv::Mat resized_img(target_size.height, target_size.width, CV_8UC3);
+        ret = resize_rga(rga_ctx->src, rga_ctx->dst, orig_img, resized_img, target_size);
+        inputs[0].buf = resized_img.data;
         
     }
     else
     {
-        inputs[0].buf = (void*)img.data;
+        inputs[0].buf = orig_img.data;
     }
     auto end_resize = std::chrono::high_resolution_clock::now();
+    
     ret = rknn_inputs_set(app_ctx->rknn_ctx, app_ctx->io_num.n_input, inputs);
     if (ret < 0)
     {
@@ -605,5 +605,30 @@ static int quick_sort_indice_inverse(std::vector<float> &input, int left, int ri
         quick_sort_indice_inverse(input, low + 1, right, indices);
     }
     return low;
+}
+int resize_rga(rga_buffer_t &src, rga_buffer_t &dst, const cv::Mat &image, cv::Mat &resized_image, const cv::Size &target_size) {
+    im_rect src_rect;
+    im_rect dst_rect;
+    memset(&src_rect, 0, sizeof(src_rect));
+    memset(&dst_rect, 0, sizeof(dst_rect));
+    size_t img_width = image.cols;
+    size_t img_height = image.rows;
+    if (image.type() != CV_8UC3)
+    {
+        printf("source image type is %d!\n", image.type());
+        return -1;
+    }
+    size_t target_width = target_size.width;
+    size_t target_height = target_size.height;
+    src = wrapbuffer_virtualaddr((void *)image.data, img_width, img_height, RK_FORMAT_RGB_888);
+    dst = wrapbuffer_virtualaddr((void *)resized_image.data, target_width, target_height, RK_FORMAT_RGB_888);
+    int ret = imcheck(src, dst, src_rect, dst_rect);
+    if (IM_STATUS_NOERROR != ret)
+    {
+        fprintf(stderr, "rga check error! %s", imStrError((IM_STATUS)ret));
+        return -1;
+    }
+    IM_STATUS STATUS = imresize(src, dst);
+    return 0;
 }
 

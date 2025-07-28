@@ -1,19 +1,41 @@
 #ifndef READER_H
 #define READER_H
-#include <opencv2/opencv.hpp>
-#include <stdio.h>
+
 #include <string>
+
+#include <opencv2/opencv.hpp>
+
+extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
+#include <libswscale/swscale.h>
+#include <libavutil/imgutils.h>
+#include <libavutil/dict.h>
+}
 
 class Reader {
 public:
-    bool isInitialized;
     Reader();
-    int init(const std::string& source);
-    int read(cv::Mat& frame);
-    void release();
     ~Reader();
-private:
-    cv::VideoCapture cap;
-};
 
+    bool open(const std::string& rtspUrl);
+    cv::Mat decodeFrame();
+    void close();
+
+private:
+    AVFormatContext* pFormatContext = nullptr;
+    AVCodecContext* pCodecContext = nullptr;
+    const AVCodec* pCodec = nullptr;
+    AVFrame* pFrame = nullptr;
+    AVFrame* pFrameRGB = nullptr;
+    SwsContext* swsContext = nullptr;
+    uint8_t* buffer = nullptr;
+    int videoStreamIndex = -1;
+    bool isOpened = false;
+
+    cv::Mat convertAVFrameToMat(AVFrame* frame);
+
+    Reader(const Reader&) = delete;
+    Reader& operator=(const Reader&) = delete;
+};
 #endif // READER_H
