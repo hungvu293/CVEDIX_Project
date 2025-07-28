@@ -3,9 +3,9 @@
 #include <iostream>
 #include <string>
 
-#include <chrono>   // Để dùng std::chrono::system_clock::time_point
-#include <iomanip>  // Để dùng std::put_time
-#include <ctime>    // Để dùng std::time_t, std::localtime, std::gmtime
+#include <chrono>   
+#include <iomanip>  
+#include <ctime>   
 
 
 #include "pipeline.h"
@@ -15,6 +15,69 @@
 #include "reader.h"
 #include "osd.h"
 #include "track.h"
+
+
+class FPSController {
+private:
+    double targetFPS;
+    std::chrono::microseconds frameInterval;
+    std::chrono::steady_clock::time_point lastFrameTime;
+    std::chrono::steady_clock::time_point startTime;
+    int frameCount;
+    double actualFPS;
+    
+public:
+    FPSController(double fps = 30.0) : targetFPS(fps), frameCount(0), actualFPS(0.0) {
+        setTargetFPS(fps);
+        lastFrameTime = std::chrono::steady_clock::now();
+        startTime = lastFrameTime;
+    }
+    
+    void setTargetFPS(double fps) {
+        targetFPS = std::max(0.1, std::min(fps, 1000.0)); 
+        frameInterval = std::chrono::microseconds(static_cast<long long>(1000000.0 / targetFPS));
+    }
+    
+    double getTargetFPS() const { return targetFPS; }
+    double getActualFPS() const { return actualFPS; }
+    
+    bool waitForNextFrame() {
+        auto currentTime = std::chrono::steady_clock::now();
+        auto elapsedSinceLastFrame = currentTime - lastFrameTime;
+        
+        if (elapsedSinceLastFrame < frameInterval) {
+            auto sleepTime = frameInterval - elapsedSinceLastFrame;
+            std::this_thread::sleep_for(sleepTime);
+            currentTime = std::chrono::steady_clock::now();
+        }
+        
+        lastFrameTime = currentTime;
+        frameCount++;
+        
+        if (frameCount % 30 == 0) {
+            auto totalElapsed = std::chrono::duration_cast<std::chrono::milliseconds>(currentTime - startTime);
+            if (totalElapsed.count() > 0) {
+                actualFPS = (frameCount * 1000.0) / totalElapsed.count();
+            }
+        }
+        
+        return true;
+    }
+    
+    bool shouldProcessFrame() {
+        auto currentTime = std::chrono::steady_clock::now();
+        auto elapsedSinceLastFrame = currentTime - lastFrameTime;
+        
+        return elapsedSinceLastFrame >= frameInterval;
+    }
+    
+    void reset() {
+        frameCount = 0;
+        lastFrameTime = std::chrono::steady_clock::now();
+        startTime = lastFrameTime;
+        actualFPS = 0.0;
+    }
+};
 
 void img_inference(const char* model_path, const char* img_path) {
     YoloV8 inference;
@@ -62,7 +125,7 @@ void sync(const char* model_path, std::string& input) {
     std::chrono::steady_clock::time_point Tbegin, Tend;
     
     // Init
-    ret = reader.init(input);
+    ret = reader.open(input);
     if (ret != 0) {
         goto out;
     }
@@ -74,7 +137,7 @@ void sync(const char* model_path, std::string& input) {
     // Inference
     while (true) {
         Tbegin = std::chrono::steady_clock::now();
-        reader.read(orig_img);
+        orig_img = reader.decodeFrame();
         if (orig_img.empty()) {
             break;
         }
@@ -114,7 +177,7 @@ void sync(const char* model_path, std::string& input) {
     }
     goto out;
 out:
-    reader.release();
+    reader.close();
     inference.release();
     osd.release();
     return;
@@ -134,11 +197,15 @@ void async(const char* model_path, std::string& input) {
 
     int ret;
     // Init
-    ret = reader.init(input);
-    if (ret != 0) {}
+    ret = reader.open(input);
+    if (ret != 0) {
+        return;
+    }
 
     ret = inference.init(model_path);
-    if (ret != 0) {}
+    if (ret != 0) {
+        return;
+    }
     // osd.init_display();
 
     std::thread read_t(read_thread_func, std::ref(reader), std::ref(reader_to_inference_queue), std::ref(running));
@@ -156,31 +223,39 @@ void async(const char* model_path, std::string& input) {
 void read_thread_func(Reader& reader, threadsafe_queue<ReaderToInference>& output_queue, std::atomic<bool>& running) {
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
-    int drop_count = 4;
-    int i = 0;
-    while (running) {
-        i++;
-        reader.read(frame);
-        if (i % drop_count == 0) {
-            capture_time = std::chrono::system_clock::now();
-            if (frame.empty()) {
-                if (!reader.isInitialized) {
-                    running = false;
-                    break;
-                }
-                std::this_thread::sleep_for(std::chrono::milliseconds(10)); 
-                continue;
-            }
-            output_queue.push(ReaderToInference(frame, capture_time));
-            std::cout << "first queue: " << output_queue.size() << std::endl;
 
-            i = 0;
+    double targetFPS = 11.0;
+    FPSController fpsController(targetFPS);
+
+    while (running) {
+        frame = reader.decodeFrame();
+        
+        if (frame.empty()) {
+            if (!reader.isOpened) {
+                running = false;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(10)); 
+            continue;
+        }
+        
+        if (fpsController.shouldProcessFrame()) {
+            capture_time = std::chrono::system_clock::now();
+            output_queue.push(ReaderToInference(frame, capture_time));
+            
+            // std::cout << "Queue size: " << output_queue.size() 
+            //           << " | Reader Target FPS: " << fpsController.getTargetFPS()
+            //           << " | Reader Actual FPS: " << std::fixed << std::setprecision(1) 
+            //           << fpsController.getActualFPS() << std::endl;
+            
+            // Wait for next frame timing
+            fpsController.waitForNextFrame();
         }
 
         if (!running) 
             break;
     }
-        reader.release();
+        reader.close();
         return;
 }
 
@@ -210,10 +285,10 @@ std::atomic<bool>& running) {
         output_queue.push(
             InferenceToTrack(frame, capture_time, *inference.od_results)
         );
-        std::cout << "second queue: " << output_queue.size() << std::endl;
+        // std::cout << "second queue: " << output_queue.size() << std::endl;
         auto end_inference_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> inference_duration = end_inference_time - start_inference_time;
-        std::cout << "Inference time: " << inference_duration.count() << " ms" << std::endl;
+        // std::cout << "Inference time: " << inference_duration.count() << " ms" << std::endl;
         
         if (!running)
             break;
@@ -250,11 +325,11 @@ std::atomic<bool>& running) {
         output_queue.push(
             TrackToOSD(frame, capture_time)
         );
-        std::cout << "third queue: " << output_queue.size() << std::endl;
+        // std::cout << "third queue: " << output_queue.size() << std::endl;
         
         auto end_track_time = std::chrono::high_resolution_clock::now();
         std::chrono::duration<double, std::milli> track_duration = end_track_time - start_track_time;
-        std::cout << "Track time: " << track_duration.count() << " ms" << std::endl;
+        // std::cout << "Track time: " << track_duration.count() << " ms" << std::endl;
         if (!running)
             break;
     }
@@ -279,6 +354,7 @@ void display_thread_func(OSD& osd, threadsafe_queue<TrackToOSD>& input_queue, st
 
         Tcurrent = std::chrono::system_clock::now();
         double delay = std::chrono::duration_cast<std::chrono::microseconds>(Tcurrent - Tcapture).count() / 1000000.0;
+        std::cout << "Delay: " << delay << std::endl;
         std::stringstream delay_stream;
         delay_stream << std::fixed << std::setprecision(2) << delay;
         std::string delay_text = "Delay: " + delay_stream.str() + "s";
@@ -287,6 +363,7 @@ void display_thread_func(OSD& osd, threadsafe_queue<TrackToOSD>& input_queue, st
         if (Tbefore_is_set) {
             double duration_s = std::chrono::duration_cast<std::chrono::microseconds>(Tcurrent - Tbefore).count() / 1000000.0;
             double fps = 1.0 / duration_s;
+            std::cout << "FPS: " << fps << std::endl;
             std::stringstream fps_stream;
             fps_stream << std::fixed << std::setprecision(2) << fps;
             std::string fps_text = "FPS: " + fps_stream.str(); 

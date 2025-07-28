@@ -58,7 +58,7 @@ typedef struct {
 typedef struct {
     rga_buffer_t src;
     rga_buffer_t dst;
-} rga_context_t
+} rga_context_t;
 
 class YoloV8 {
 public:

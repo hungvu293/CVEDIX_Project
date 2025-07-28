@@ -37,6 +37,10 @@ YoloV8::~YoloV8() {
     if (outputs) {
         delete outputs;
         outputs = nullptr;
+    if (rga_ctx) {
+        delete rga_ctx;
+        rga_ctx = nullptr;
+    }
     }
 }
 int YoloV8::read_data_from_file(const char *path, char **out_data)
@@ -196,8 +200,8 @@ int YoloV8::run(cv::Mat& orig_img)
     auto start = std::chrono::high_resolution_clock::now();
     int ret;
     // Preprocess and set inputs
-    int img_width  = img.cols;
-    int img_height = img.rows;
+    int img_width  = orig_img.cols;
+    int img_height = orig_img.rows;
     auto start_resize = std::chrono::high_resolution_clock::now();
     
     // TODO: Use letter box to keep aspect ratio
@@ -250,16 +254,16 @@ int YoloV8::run(cv::Mat& orig_img)
     auto end_post = std::chrono::high_resolution_clock::now();
 
     std::chrono::duration<double, std::milli> pre_duration = end_pre - start;
-    std::chrono::duration<double, std::milli> convert_duration = end_convert - start_convert;
-    std::chrono::duration<double, std::milli> resize_duration = end_resize - start_resize;
+    // std::chrono::duration<double, std::milli> convert_duration = end_convert - start_convert;
+    // std::chrono::duration<double, std::milli> resize_duration = end_resize - start_resize;
     std::chrono::duration<double, std::milli> run_duration = end_run - end_pre;
     std::chrono::duration<double, std::milli> post_duration = end_post - end_run;
 
-    std::cout << "pre: " << pre_duration.count() << " ms" << std::endl;
-    std::cout << "convert: " << convert_duration.count() << " ms" << std::endl;
-    std::cout << "resize: " << resize_duration.count() << " ms" << std::endl;
-    std::cout << "run: " << run_duration.count() << " ms" << std::endl;
-    std::cout << "post: " << post_duration.count() << " ms" << std::endl;
+    // std::cout << "pre: " << pre_duration.count() << " ms" << std::endl;
+    // std::cout << "convert: " << convert_duration.count() << " ms" << std::endl;
+    // std::cout << "resize: " << resize_duration.count() << " ms" << std::endl;
+    // std::cout << "run: " << run_duration.count() << " ms" << std::endl;
+    // std::cout << "post: " << post_duration.count() << " ms" << std::endl;
     return 0;
 }
 
@@ -421,6 +425,7 @@ int YoloV8::release()
         rknn_destroy(app_ctx->rknn_ctx);
         app_ctx->rknn_ctx = 0;
     }
+
     return 0;
 }
 

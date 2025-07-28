@@ -17,8 +17,10 @@ class Reader {
 public:
     Reader();
     ~Reader();
+    
+    bool isOpened = false;
 
-    bool open(const std::string& rtspUrl);
+    int open(const std::string& rtspUrl);
     cv::Mat decodeFrame();
     void close();
 
@@ -31,9 +33,9 @@ private:
     SwsContext* swsContext = nullptr;
     uint8_t* buffer = nullptr;
     int videoStreamIndex = -1;
-    bool isOpened = false;
 
     cv::Mat convertAVFrameToMat(AVFrame* frame);
+    enum AVPixelFormat getCurrentSwsFormat();
 
     Reader(const Reader&) = delete;
     Reader& operator=(const Reader&) = delete;

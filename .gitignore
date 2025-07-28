@@ -8,10 +8,10 @@ cmake_install.cmake
 Makefile
 
 # Object and binary files
-*.o
+# *.o
 *.obj
-*.a
-*.so
+# *.a
+# *.so
 *.out
 *.elf
 *.bin
