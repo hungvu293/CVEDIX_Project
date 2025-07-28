@@ -19,16 +19,16 @@ void sync(const char* model_path, std::string& input);
 void async(const char* model_path, std::string& input);
 
 void read_thread_func(Reader& reader, 
-    threadsafe_queue<ReaderToInference>& output_queue, 
+    lock_free_queue<ReaderToInference>& output_queue, 
     std::atomic<bool>& running);
 void inference_thread_func(YoloV8& inference, 
-    threadsafe_queue<ReaderToInference>& input_queue, threadsafe_queue<InferenceToTrack>& output_queue, 
+    lock_free_queue<ReaderToInference>& input_queue, lock_free_queue<InferenceToTrack>& output_queue, 
     std::atomic<bool>& running);
 void track_thread_func(Tracking& track, 
-    threadsafe_queue<InferenceToTrack>& input_queue, threadsafe_queue<TrackToOSD>& output_queue, 
+    lock_free_queue<InferenceToTrack>& input_queue, lock_free_queue<TrackToOSD>& output_queue, 
     std::atomic<bool>& running);
 void display_thread_func(OSD& osd, 
-    threadsafe_queue<TrackToOSD>& input_queue, 
+    lock_free_queue<TrackToOSD>& input_queue, 
     std::atomic<bool>& running);
 #endif 
 

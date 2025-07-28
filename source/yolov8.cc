@@ -37,10 +37,10 @@ YoloV8::~YoloV8() {
     if (outputs) {
         delete outputs;
         outputs = nullptr;
+    }
     if (rga_ctx) {
         delete rga_ctx;
         rga_ctx = nullptr;
-    }
     }
 }
 int YoloV8::read_data_from_file(const char *path, char **out_data)
