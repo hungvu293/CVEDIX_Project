@@ -214,7 +214,7 @@ cv::Mat Reader::decodeFrame() {
     AVPacket packet;
     cv::Mat frameMat;
     int frameCount = 0;
-    const int maxFrameAttempts = 100; 
+    const int maxFrameAttempts = 10; 
 
     while (av_read_frame(pFormatContext, &packet) >= 0 && frameCount < maxFrameAttempts) {
         frameCount++;

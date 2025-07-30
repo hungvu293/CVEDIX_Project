@@ -19,7 +19,10 @@ Tracking::Tracking(float det_thresh_, int max_age_, int min_hits_, float iou_thr
                    int delta_t_, std::string asso_func_, float inertia_, bool use_byte_)
     : oc_sort_tracker(det_thresh_, max_age_, min_hits_, iou_threshold_,
                       delta_t_, asso_func_, inertia_, use_byte_) {}
-Tracking::~Tracking() {}
+Tracking::~Tracking() {
+    // oc_sort_tracker.clear();
+    std::cout << "Tracking object destroyed." << std::endl;
+}
 
 std::vector<Detection> Tracking::convert_output(object_detect_result_list* od_results) {
     std::vector<Detection> output;

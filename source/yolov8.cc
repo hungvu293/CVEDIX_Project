@@ -208,8 +208,10 @@ int YoloV8::run(cv::Mat& orig_img)
     if (img_width != app_ctx->model_width || img_height != app_ctx->model_height)
     {
         cv::Size target_size(app_ctx->model_width, app_ctx->model_height);
-        cv::Mat resized_img(target_size.height, target_size.width, CV_8UC3);
-        ret = resize_rga(rga_ctx->src, rga_ctx->dst, orig_img, resized_img, target_size);
+        // cv::Mat resized_img(target_size.height, target_size.width, CV_8UC3);
+        // ret = resize_rga(rga_ctx->src, rga_ctx->dst, orig_img, resized_img, target_size);
+        cv::Mat resized_img;
+        cv::resize(orig_img, resized_img, target_size);
         inputs[0].buf = resized_img.data;
         
     }
