@@ -33,14 +33,17 @@ int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
         }
     }
 
-    // TODO: add batch configure, add model_path
     const char* model_path = "../model/yolov8.rknn";
-    detector = std::make_unique<YoloV8>();
-    ret = detector->init(model_path);
-    if (ret != 0) {
-        std::cerr << "Init model false" << std::endl;
-        return -1;
-    }
+    // detector = std::make_unique<YoloV8>();
+    // ret = detector->init(model_path);
+    // if (ret != 0) {
+    //     std::cerr << "Init model false" << std::endl;
+    //     return -1;
+    // }
+
+    int threadNum = 2;
+    rknnPool<YoloV8, cv::Mat, object_detect_result_list> pool(model_path, threadNum);
+    
 
     for (int i = 0; i < cam_nb; i++) {
         trackers[i] = std::make_unique<Tracking>();
@@ -93,12 +96,13 @@ void Pipeline::decodeLoop(int id) {
     std::chrono::system_clock::time_point capture_time;
     
     int empty_frame_count = 0;
-    int max_empty_frames = 10;
     
     int ret;
 
-    int drop_interval = 7;
+    int drop_interval = 10;
     int drop_frame_count = 0;
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
     while (is_system_running) {
         if (!is_camera_running[id]) {
             std::cout << "Retry connect" << info.rtsp_urls[id] << std::endl;
@@ -121,29 +125,24 @@ void Pipeline::decodeLoop(int id) {
             }
         }
         else {
-            frame = readers[id]->decodeFrame();
-            if (frame.empty()) {
-                if (!readers[id]->isOpened || empty_frame_count > max_empty_frames) {
-                    is_camera_running[id].store(false);
-                    continue;
-                }
-                empty_frame_count++;
-                std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            ret = readers[id]->decodeFrame(frame);
+            if (ret != 0) {
+                is_camera_running[id].store(false);
                 continue;
             }
-            empty_frame_count = 0;
 
             drop_frame_count++;
             if (drop_frame_count < drop_interval) {
                 continue;
             }
             drop_frame_count = 0;
-            
+            // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
             if (!frame.empty()) {
                 capture_time = std::chrono::system_clock::now();
                 ReaderToInference data(frame, capture_time);
                 reader_to_inference_queues[id].push(data);
-                std::cout << "decode push" << reader_to_inference_queues[id].size() << std::endl;
+                std::cout << "decode push: " << id << ", : " << reader_to_inference_queues[id].size() << std::endl;
             }
         }
     }
@@ -180,26 +179,36 @@ void Pipeline::detectLoop() {
                 continue;
             }
 
-            // frame = data_ptr->origin_frame;
-            // capture_time = data_ptr->capture_time;
-            if (data_ptr->origin_frame.empty())
-            {
-                std::cout << "Empty frame detected for camera " << i << std::endl;
-                continue;
-            }            
-            ret = detector->run(data_ptr->origin_frame);
+            frame = data_ptr->origin_frame;
+            capture_time = data_ptr->capture_time;        
+            ret = detector->run(frame);
             if (ret != 0) {
                 std::cerr << "Detection failed for camera " << i << std::endl;
                 continue;   
             }
             detector->filter_class("person");
 
-            InferenceToTrack data(data_ptr->origin_frame, data_ptr->capture_time, *detector->od_results);
+            InferenceToTrack data(frame, capture_time, *detector->od_results);
             inference_to_track_queues[i].push(data);
         }
     }
     std::cout << "Detection thread stopped." << std::endl;
     return;
+}
+
+void Pipeline::detectPoolLoop() {
+    cv::Mat frame;
+    std::chrono::system_clock::time_point capture_time;
+    int ret;
+    bool any_camera_running = false;
+    while (is_system_running) {
+        any_camera_running = false;
+        for (int i = 0; i < is_camera_running.size(); i++) {
+            if (is_camera_running[i]) {
+                any_camera_running = true;
+                break;
+            }
+        }
 }
 
 void Pipeline::trackLoop(int id) {
@@ -222,11 +231,11 @@ void Pipeline::trackLoop(int id) {
         // frame = data_ptr->origin_frame;
         // capture_time = data_ptr->capture_time;
         // od_results = data_ptr->od_results;
-        if (data_ptr->origin_frame.empty())
-        {
-            std::cout << "Empty frame detected for camera " << id << std::endl;
-            continue;
-        }
+        // if (data_ptr->origin_frame.empty())
+        // {
+        //     std::cout << "Empty frame detected for camera " << id << std::endl;
+        //     continue;
+        // }
 
         detections = trackers[id]->convert_output(&data_ptr->od_results);
         res = trackers[id]->run(data_ptr->origin_frame, detections);
@@ -271,14 +280,14 @@ void Pipeline::displayLoop() {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 continue;
             }
-            // frames[i] = data_ptr->processed_frame;
-            // Tcapture[i] = data_ptr->capture_time;
+            frames[i] = data_ptr->processed_frame;
+            Tcapture[i] = data_ptr->capture_time;
             
-            if (frames[i].empty())
-            {
-                std::cout << "Empty frame detected for camera " << i << std::endl;
-                continue;
-            }
+            // if (frames[i].empty())
+            // {
+            //     std::cout << "Empty frame detected for camera " << i << std::endl;
+            //     continue;
+            // }
             
             Tcurrent = std::chrono::system_clock::now();
             // std::chrono::duration<double, std::milli> latency = Tcurrent - Tcapture[i];
@@ -286,21 +295,22 @@ void Pipeline::displayLoop() {
             std::cout << "Latency for camera " << i << ": " << latency.count() << " ms" << std::endl;
         }
 
-        if (!frames[0].empty() && !frames[1].empty()) {
-            cv::Mat frame0_resized, frame1_resized;
-            cv::resize(frames[0], frame0_resized, cv::Size(1920, 540));
-            cv::resize(frames[1], frame1_resized, cv::Size(1920, 540));
-            cv::Mat concatenated_frame;
-            cv::vconcat(frame0_resized, frame1_resized, concatenated_frame);
-            display->show(concatenated_frame);
-        }
-        if (cv::waitKey(1) == 27) { // Exit on 'ESC' key
-            is_system_running.store(false);
-            break;
-        }
+        // if (!frames[0].empty() && !frames[1].empty()) {
+        //     cv::Mat frame0_resized, frame1_resized;
+        //     cv::resize(frames[0], frame0_resized, cv::Size(1920, 540));
+        //     cv::resize(frames[1], frame1_resized, cv::Size(1920, 540));
+        //     cv::Mat concatenated_frame;
+        //     cv::vconcat(frame0_resized, frame1_resized, concatenated_frame);
+        //     display->show(concatenated_frame);
+        // }
+        // if (cv::waitKey(1) == 27) { // Exit on 'ESC' key
+        //     is_system_running.store(false);
+        //     break;
+        // }
 
     }
     std::cout << "Display thread stopped." << std::endl;
+    return;
 }
 
 // void Pipeline::messageLoop() {

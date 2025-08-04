@@ -7,6 +7,7 @@
 #include <thread>
 #include <atomic>
 
+#include "rknnPool.hpp"
 
 #include "manager.h"
 #include "data.h"
@@ -66,7 +67,7 @@ public:
 private:
     void decodeLoop(int id);
     void detectLoop();
-    void detectBatchLoop();
+    void detectPoolLop();
     void trackLoop(int id);
     void displayLoop();
     void messageLoop();

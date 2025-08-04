@@ -2,15 +2,17 @@
 #define READER_H
 
 #include <string>
-
 #include <opencv2/opencv.hpp>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
-#include <libswscale/swscale.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/dict.h>
+#include <libavutil/hwcontext_drm.h>
+#include <libdrm/drm_fourcc.h>
+#include <rga/RgaApi.h>
+#include <rga/rga.h>
 }
 
 class Reader {
@@ -21,7 +23,7 @@ public:
     bool isOpened = false;
 
     int open(const std::string& rtspUrl);
-    cv::Mat decodeFrame();
+    int decodeFrame(cv::Mat& frame);
     void close();
 
 private:
@@ -29,15 +31,16 @@ private:
     AVCodecContext* pCodecContext = nullptr;
     const AVCodec* pCodec = nullptr;
     AVFrame* pFrame = nullptr;
-    AVFrame* pFrameRGB = nullptr;
-    SwsContext* swsContext = nullptr;
-    uint8_t* buffer = nullptr;
+    uint8_t* rgbBuffer = nullptr;
+    int rgbBufferSize = 0;
     int videoStreamIndex = -1;
 
     cv::Mat convertAVFrameToMat(AVFrame* frame);
     enum AVPixelFormat getCurrentSwsFormat();
+    int convert_rgb(AVFrame* frame, uint8_t* rgb_buf);
 
     Reader(const Reader&) = delete;
     Reader& operator=(const Reader&) = delete;
 };
+
 #endif // READER_H

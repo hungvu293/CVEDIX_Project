@@ -137,8 +137,8 @@ void sync(const char* model_path, std::string& input) {
     // Inference
     while (true) {
         Tbegin = std::chrono::steady_clock::now();
-        orig_img = reader.decodeFrame();
-        if (orig_img.empty()) {
+        ret = reader.decodeFrame(orig_img);
+        if (ret != 0) {
             break;
         }
         else {
@@ -221,6 +221,7 @@ void async(const char* model_path, std::string& input) {
 }
 
 void read_thread_func(Reader& reader, lock_free_queue<ReaderToInference>& output_queue, std::atomic<bool>& running) {
+    int ret;
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
 
@@ -228,9 +229,9 @@ void read_thread_func(Reader& reader, lock_free_queue<ReaderToInference>& output
     FPSController fpsController(targetFPS);
 
     while (running) {
-        frame = reader.decodeFrame();
-        
-        if (frame.empty()) {
+        ret = reader.decodeFrame(frame);
+
+        if (ret != 0) {
             if (!reader.isOpened) {
                 running = false;
                 break;

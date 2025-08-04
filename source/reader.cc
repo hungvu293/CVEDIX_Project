@@ -1,6 +1,42 @@
 #include "reader.h" 
 
 #include <iostream>
+#include <opencv2/opencv.hpp>
+
+extern "C" {
+#include <libavutil/hwcontext_drm.h>
+#include <libavutil/pixfmt.h>
+#include <rga/RgaApi.h>
+#include <rga/rga.h>
+}
+
+enum AVPixelFormat get_format(AVCodecContext *Context, const enum AVPixelFormat *PixFmt)
+{
+    while (*PixFmt != AV_PIX_FMT_NONE) {
+        if (*PixFmt == AV_PIX_FMT_DRM_PRIME)
+            return AV_PIX_FMT_DRM_PRIME;
+        PixFmt++;
+    }
+    return AV_PIX_FMT_NONE;
+}
+
+static uint32_t drm_get_rgaformat(uint32_t drm_fmt)
+{
+    switch (drm_fmt) {
+    case DRM_FORMAT_NV12:
+        return RK_FORMAT_YCbCr_420_SP;
+    case DRM_FORMAT_NV15:
+        return RK_FORMAT_YCbCr_420_SP_10B;
+    case DRM_FORMAT_NV16:
+        return RK_FORMAT_YCbCr_422_SP;
+    case DRM_FORMAT_YUYV:
+        return RK_FORMAT_YUYV_422;
+    case DRM_FORMAT_UYVY:
+        return RK_FORMAT_UYVY_422;
+    default:
+        return 0;
+    }
+}
 
 Reader::Reader() {
     avformat_network_init();
@@ -112,6 +148,7 @@ int Reader::open(const std::string& rtspUrl) {
         return -1;
     }
 
+
     pCodecContext = avcodec_alloc_context3(pCodec);
     if (!pCodecContext) {
         std::cerr << "Failed to allocate AVCodecContext." << std::endl;
@@ -124,6 +161,18 @@ int Reader::open(const std::string& rtspUrl) {
         close();
         return -1;
     }
+
+    // Log thông số codec context
+    std::cout << "[open] pCodecContext: width=" << pCodecContext->width
+              << ", height=" << pCodecContext->height
+              << ", pix_fmt=" << pCodecContext->pix_fmt
+              << ", coded_width=" << pCodecContext->coded_width
+              << ", coded_height=" << pCodecContext->coded_height
+              << std::endl;
+
+    // Set DRM PRIME format for hardware decoding
+    pCodecContext->pix_fmt = AV_PIX_FMT_DRM_PRIME;
+    pCodecContext->get_format = get_format;
 
     AVDictionary* codecOpts = nullptr;
     if (strstr(pCodec->name, "rkmpp")) {
@@ -141,59 +190,22 @@ int Reader::open(const std::string& rtspUrl) {
     av_dict_free(&codecOpts);
 
     pFrame = av_frame_alloc();
-    pFrameRGB = av_frame_alloc();
-    if (!pFrame || !pFrameRGB) {
+    if (!pFrame) {
         std::cerr << "Failed to allocate AVFrame." << std::endl;
         close();
         return -1;
     }
 
+    // Allocate RGB buffer for conversion
+    // int width = pCodecContext->width > 0 ? pCodecContext->width : 1920;
+    // int height = pCodecContext->height > 0 ? pCodecContext->height : 1080;
     int width = pCodecContext->width;
     int height = pCodecContext->height;
     
-    if (width <= 0 || height <= 0) {
-        std::cerr << "Invalid frame dimensions: " << width << "x" << height << std::endl;
-        close();
-        return -1;
-    }
-
-    int numBytes = av_image_get_buffer_size(AV_PIX_FMT_RGB24, width, height, 1);
-    buffer = (uint8_t*)av_malloc(numBytes * sizeof(uint8_t));
-    if (!buffer) {
-        std::cerr << "Failed to allocate buffer." << std::endl;
-        close();
-        return -1;
-    }
-
-    av_image_fill_arrays(pFrameRGB->data, pFrameRGB->linesize, buffer, AV_PIX_FMT_RGB24,
-                         width, height, 1);
-
-    enum AVPixelFormat srcFormat = pCodecContext->pix_fmt;
-    if (srcFormat == AV_PIX_FMT_NONE) {
-        if (strstr(pCodec->name, "rkmpp")) {
-            srcFormat = AV_PIX_FMT_NV12; 
-        } else {
-            srcFormat = AV_PIX_FMT_YUV420P;
-        }
-        std::cout << "Codec format unknown, assuming: " << av_get_pix_fmt_name(srcFormat) << std::endl;
-    }
-
-    swsContext = sws_getContext(
-        width,
-        height,
-        srcFormat,
-        width,
-        height,
-        AV_PIX_FMT_RGB24,
-        SWS_BILINEAR,
-        nullptr,
-        nullptr,
-        nullptr
-    );
-
-    if (!swsContext) {
-        std::cerr << "Could not initialize SwsContext with format: " 
-                  << av_get_pix_fmt_name(srcFormat) << std::endl;
+    rgbBufferSize = width * height * 3; // RGB24
+    rgbBuffer = (uint8_t*)av_malloc(rgbBufferSize);
+    if (!rgbBuffer) {
+        std::cerr << "Failed to allocate RGB buffer." << std::endl;
         close();
         return -1;
     }
@@ -205,16 +217,73 @@ int Reader::open(const std::string& rtspUrl) {
     return 0;
 }
 
-cv::Mat Reader::decodeFrame() {
+int Reader::convert_rgb(AVFrame* frame, uint8_t* rgb_buf) {
+    if (!frame || !rgb_buf) {
+        std::cerr << "Invalid frame or buffer for RGB conversion." << std::endl;
+        return -1;
+    }
+
+    AVDRMFrameDescriptor *desc = (AVDRMFrameDescriptor *)frame->data[0];
+    if (!desc) {
+        std::cerr << "No DRM frame descriptor available." << std::endl;
+        return -1;
+    }
+
+    AVDRMLayerDescriptor *layer = &desc->layers[0];
+    if (!layer) {
+        std::cerr << "No DRM layer descriptor available." << std::endl;
+        return -1;
+    }
+
+    // Get stride information
+    int wStride = layer->planes[0].pitch;
+    int hStride = (layer->planes[1].offset / layer->planes[0].pitch);
+    
+    // Get DRM format and convert to RGA format
+    uint32_t drm_format = layer->format;
+    RgaSURF_FORMAT src_format = (RgaSURF_FORMAT)drm_get_rgaformat(drm_format);
+    
+    if (src_format == 0) {
+        std::cerr << "Unsupported DRM format: " << drm_format << std::endl;
+        return -1;
+    }
+
+    // Setup RGA source
+    rga_info_t src;
+    memset(&src, 0, sizeof(rga_info_t));
+    src.fd = desc->objects[0].fd;
+    src.mmuFlag = 1;
+
+    // Setup RGA destination  
+    rga_info_t dst;
+    memset(&dst, 0, sizeof(rga_info_t));
+    dst.fd = -1;
+    dst.virAddr = rgb_buf;
+    dst.mmuFlag = 1;
+
+    // Set rectangles for conversion (no resize, same dimensions)
+    rga_set_rect(&src.rect, 0, 0, frame->width, frame->height, wStride, hStride, src_format);
+    rga_set_rect(&dst.rect, 0, 0, frame->width, frame->height, frame->width, frame->height, RK_FORMAT_RGB_888);
+
+    // Perform RGA conversion
+    int ret = c_RkRgaBlit(&src, &dst, NULL);
+    if (ret) {
+        std::cerr << "RGA conversion failed with error: " << ret << std::endl;
+        return -1;
+    }
+
+    return 0;
+}
+
+int Reader::decodeFrame(cv::Mat& frame) {
     if (!isOpened) {
         std::cerr << "Reader is not opened. Call open() first." << std::endl;
-        return cv::Mat();
+        return -1;
     }
 
     AVPacket packet;
-    cv::Mat frameMat;
     int frameCount = 0;
-    const int maxFrameAttempts = 10; 
+    const int maxFrameAttempts = 5; 
 
     while (av_read_frame(pFormatContext, &packet) >= 0 && frameCount < maxFrameAttempts) {
         frameCount++;
@@ -224,69 +293,53 @@ cv::Mat Reader::decodeFrame() {
             if (response < 0) {
                 std::cerr << "Error while sending a packet to the decoder: " << response << std::endl;
                 av_packet_unref(&packet);
-                continue;
+                close();
+                return -1;
+                // continue;
             }
 
             while (response >= 0) {
                 response = avcodec_receive_frame(pCodecContext, pFrame);
                 if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
+                    // std::cerr << "averror" << std::endl;
+                    // close();
+                    // return -1;
                     break;
                 } else if (response < 0) {
                     std::cerr << "Error while receiving a frame from the decoder: " << response << std::endl;
+                    // close();
+                    // return -1;
                     break;
                 }
 
-                if (pFrame->format != AV_PIX_FMT_NONE) {
-                    enum AVPixelFormat frameFormat = (enum AVPixelFormat)pFrame->format;
-                    
-                    static bool formatLogged = false;
-                    if (!formatLogged) {
-                        std::cout << "First frame format: " << av_get_pix_fmt_name(frameFormat) << std::endl;
-                        formatLogged = true;
-                    }
-                    
-                    bool needRecreate = false;
-                    
-                    if (frameFormat != AV_PIX_FMT_NV12 && frameFormat != AV_PIX_FMT_YUV420P) {
-                        needRecreate = true;
-                    }
-                    
-                    if (needRecreate) {
-                        std::cout << "Recreating SwsContext for format: " 
-                                  << av_get_pix_fmt_name(frameFormat) << std::endl;
-                        
-                        if (swsContext) {
-                            sws_freeContext(swsContext);
-                        }
-                        
-                        swsContext = sws_getContext(
-                            pFrame->width,
-                            pFrame->height,
-                            frameFormat,
-                            pFrame->width,
-                            pFrame->height,
-                            AV_PIX_FMT_RGB24,
-                            SWS_BILINEAR,
-                            nullptr,
-                            nullptr,
-                            nullptr
-                        );
-                        
-                        if (!swsContext) {
-                            std::cerr << "Could not recreate SwsContext with format: " 
-                                      << av_get_pix_fmt_name(frameFormat) << std::endl;
-                            av_packet_unref(&packet);
-                            return cv::Mat();
-                        }
-                    }
+                if (pFrame->width <= 0 || pFrame->height <= 0) {
+                    // std::cerr << "Skip empty frame." << std::endl;
+                    // break;
+                    std::cerr << "frame error" << std::endl;
+                    close();
+                    return -1;
                 }
 
-                sws_scale(swsContext, pFrame->data, pFrame->linesize, 0, pFrame->height,
-                          pFrameRGB->data, pFrameRGB->linesize);
-
-                frameMat = convertAVFrameToMat(pFrameRGB);
-                av_packet_unref(&packet);
-                return frameMat;
+                // Check if we have a DRM PRIME frame
+                if (pFrame->format == AV_PIX_FMT_DRM_PRIME) {
+                    // Use RGA for hardware-accelerated conversion
+                    if (convert_rgb(pFrame, rgbBuffer) == 0) {
+                        // Create OpenCV Mat from RGB buffer
+                        frame = cv::Mat(pFrame->height, pFrame->width, CV_8UC3, rgbBuffer).clone();
+                        av_packet_unref(&packet);
+                        return 0; // Successfully decoded and converted frame
+                    } else {
+                        std::cerr << "Failed to convert frame using RGA." << std::endl;
+                        // break;
+                        close();
+                        return -1;
+                    }
+                } else {
+                    std::cerr << "Frame format is not DRM_PRIME: " << pFrame->format << std::endl;
+                    // break;
+                    close();
+                    return -1;
+                }
             }
         }
         av_packet_unref(&packet);
@@ -294,9 +347,10 @@ cv::Mat Reader::decodeFrame() {
 
     if (frameCount >= maxFrameAttempts) {
         std::cerr << "Max frame attempts reached, stream might be problematic." << std::endl;
+        close();
     }
 
-    return cv::Mat();
+    return -1; 
 }
 
 cv::Mat Reader::convertAVFrameToMat(AVFrame* frame) {
@@ -308,21 +362,13 @@ cv::Mat Reader::convertAVFrameToMat(AVFrame* frame) {
 }
 
 enum AVPixelFormat Reader::getCurrentSwsFormat() {
-    return AV_PIX_FMT_NONE; 
+    return AV_PIX_FMT_DRM_PRIME; 
 }
 
 void Reader::close() {
-    if (swsContext) {
-        sws_freeContext(swsContext);
-        swsContext = nullptr;
-    }
-    if (buffer) {
-        av_free(buffer);
-        buffer = nullptr;
-    }
-    if (pFrameRGB) {
-        av_frame_free(&pFrameRGB);
-        pFrameRGB = nullptr;
+    if (rgbBuffer) {
+        av_free(rgbBuffer);
+        rgbBuffer = nullptr;
     }
     if (pFrame) {
         av_frame_free(&pFrame);
