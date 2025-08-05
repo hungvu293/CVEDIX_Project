@@ -1,7 +1,19 @@
 #include <vector>
 #include "detector.h"
-
 #include <mutex>
+const int RK3566 = 1;
+
+static int get_core_num()
+{
+    static int core_num = 0;
+    static std::mutex mtx;
+
+    std::lock_guard<std::mutex> lock(mtx);
+
+    int temp = core_num % RK3566;
+    core_num++;
+    return temp;
+}
 
 int resize_rga(rga_buffer_t &src, rga_buffer_t &dst, const cv::Mat &image, cv::Mat &resized_image, const cv::Size &target_size) {
     im_rect src_rect;
@@ -163,15 +175,6 @@ static int saveFloat(const char *file_name, float *output, int element_size)
     return 0;
 }
 
-// static int8_t qnt_f32_to_affine(float f32, int32_t zp, float scale)
-// {
-//   float dst_val = (f32 / scale) + zp;
-//   int8_t res = (int8_t)__clip(dst_val, -128, 127);
-//   return res;
-// }
-
-// static float deqnt_affine_to_f32(int8_t qnt, int32_t zp, float scale) { return ((float)qnt - (float)zp) * scale; }
-
 Detector::Detector(const std::string &model_path) : model_path(model_path) {
     this->model_path = model_path;
 }
@@ -192,6 +195,10 @@ int Detector::init(rknn_context *ctx_in, bool share_weight) {
     printf("Loading model...\n");
     int model_data_size = 0;
     model_data = load_model(model_path.c_str(), &model_data_size);
+    if (model_data == NULL) {
+        printf("load model %s failed!\n", model_path.c_str());
+        return -1;
+    }
     if (share_weight == true)
         ret = rknn_dup_context(ctx_in, &ctx);
     else
@@ -202,27 +209,27 @@ int Detector::init(rknn_context *ctx_in, bool share_weight) {
         return -1;
     }
 
-    rknn_core_mask core_mask;
-    switch (get_core_num())
-    {
-    case 0:
-        core_mask = RKNN_NPU_CORE_0;
-        break;
-    case 1:
-        core_mask = RKNN_NPU_CORE_1;
-        break;
-    case 2:
-        core_mask = RKNN_NPU_CORE_2;
-        break;
-    }
-    ret = rknn_set_core_mask(ctx, core_mask);
-    if (ret < 0)
-    {
-        printf("rknn_init core error ret=%d\n", ret);
-        return -1;
-    }
+    // rknn_core_mask core_mask;
+    // switch (get_core_num())
+    // {
+    // case 0:
+    //     core_mask = RKNN_NPU_CORE_0;
+    //     break;
+    // case 1:
+    //     core_mask = RKNN_NPU_CORE_1;
+    //     break;
+    // case 2:
+    //     core_mask = RKNN_NPU_CORE_2;
+    //     break;
+    // }
+    // ret = rknn_set_core_mask(ctx, core_mask);
+    // if (ret < 0)
+    // {
+    //     printf("rknn_init core error ret=%d\n", ret);
+    //     return -1;
+    // }
 
-        rknn_sdk_version version;
+    rknn_sdk_version version;
     ret = rknn_query(ctx, RKNN_QUERY_SDK_VERSION, &version, sizeof(rknn_sdk_version));
     if (ret < 0)
     {
@@ -255,14 +262,45 @@ int Detector::init(rknn_context *ctx_in, bool share_weight) {
     }
 
     // 设置输出参数/Set the output parameters
+    // output_attrs = (rknn_tensor_attr *)calloc(io_num.n_output, sizeof(rknn_tensor_attr));
+    // for (int i = 0; i < io_num.n_output; i++)
+    // {
+    //     output_attrs[i].index = i;
+    //     ret = rknn_query(ctx, RKNN_QUERY_OUTPUT_ATTR, &(output_attrs[i]), sizeof(rknn_tensor_attr));
+    //     dump_tensor_attr(&(output_attrs[i]));
+    // }
     output_attrs = (rknn_tensor_attr *)calloc(io_num.n_output, sizeof(rknn_tensor_attr));
     for (int i = 0; i < io_num.n_output; i++)
     {
         output_attrs[i].index = i;
         ret = rknn_query(ctx, RKNN_QUERY_OUTPUT_ATTR, &(output_attrs[i]), sizeof(rknn_tensor_attr));
-        dump_tensor_attr(&(output_attrs[i]));
-    }
+        if (ret < 0) {
+            printf("rknn_init error! rknn_query fail! ret=%d\n", ret);
+            return -1;
+        }
 
+        printf("Output tensor %d details:\n", i);
+        printf("  index: %d\n", output_attrs[i].index);
+        printf("  name: %s\n", output_attrs[i].name);
+        printf("  n_dims: %d\n", output_attrs[i].n_dims);
+        
+        // In ra kích thước của từng chiều
+        printf("  dims: [");
+        for (int j = 0; j < output_attrs[i].n_dims; ++j) {
+            printf("%d", output_attrs[i].dims[j]);
+            if (j < output_attrs[i].n_dims - 1) {
+                printf(", ");
+            }
+        }
+        printf("]\n");
+
+        printf("  n_elems: %d\n", output_attrs[i].n_elems);
+        printf("  size: %d\n", output_attrs[i].size);
+        printf("  fmt: %d (RKNN_TENSOR_NCHW=0, RKNN_TENSOR_NHWC=1)\n", output_attrs[i].fmt);
+        printf("  type: %d (RKNN_TENSOR_UINT8=0, RKNN_TENSOR_FLOAT16=1, RKNN_TENSOR_INT8=2, ...)\n", output_attrs[i].type);
+        printf("  scale: %f\n", output_attrs[i].scale);
+        printf("  zp: %d\n", output_attrs[i].zp);
+    }
     if (input_attrs[0].fmt == RKNN_TENSOR_NCHW)
     {
         printf("model is NCHW input fmt\n");
@@ -295,7 +333,6 @@ rknn_context *Detector::get_pctx()
 }
 
 std::vector<Detection> Detector::infer(cv::Mat &ori_img) {
-    std::lock_guard<std::mutex> lock(mtx);
     img_width = ori_img.cols;
     img_height = ori_img.rows;
 
@@ -310,14 +347,14 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img) {
         rga_buffer_t dst;
         memset(&src, 0, sizeof(src));
         memset(&dst, 0, sizeof(dst));
-        ret = resize_rga(src, dst, img, resized_img, target_size);
+        ret = resize_rga(src, dst, ori_img, resized_img, target_size);
         if (ret != 0) {
             std::cerr << "resize rga error" << std::endl;
         }
         inputs[0].buf = resized_img.data;
     }
     else {
-        inputs[0].buf = img.data;
+        inputs[0].buf = ori_img.data;
     }
 
     rknn_inputs_set(ctx, io_num.n_input, inputs);
@@ -326,58 +363,45 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img) {
     memset(outputs, 0, sizeof(outputs));
     for (int i = 0; i < io_num.n_output; i++)
     {
-        outputs[i].want_float = 0;
+        outputs[i].want_float = 1;
     }
 
     ret = rknn_run(ctx, NULL);
     ret = rknn_outputs_get(ctx, io_num.n_output, outputs, NULL);
 
     std::vector<Detection> detections;
-    // std::vector<float> out_scales;
-    // std::vector<int32_t> out_zps;
-    // for (int i = 0; i < io_num.n_output; ++i)
-    // {
-    //     out_scales.push_back(output_attrs[i].scale);
-    //     out_zps.push_back(output_attrs[i].zp);
-    // }
-    float out_scale = output_attrs[0].scale;
-    int32_t out_zp = output_attrs[0].zp;
-
     std::vector<int> class_ids;
     std::vector<float> confidences;
     std::vector<cv::Rect> boxes;
 
-    // int8_t thres_i8 = qnt_f32_to_affine(box_conf_threshold, out_zp, out_scale);
-    int num_classes = 1;
     int num_anchors = 8400;
-    int8_t* out = (int8_t*) outputs[0].buf;
-    for (int i = 0; i < num_anchors; ++i) {
-        float cx = (out[0] - out_zp) * out_scale;
-        float cy = (out[1] - out_zp) * out_scale;
-        float w  = (out[2] - out_zp) * out_scale;
-        float h  = (out[3] - out_zp) * out_scale;
-        float obj = (out[4] - out_zp) * out_scale;
+    int num_values_per_anchor = 5; 
+    float* output_data = (float*)outputs[0].buf;
 
-        float max_score = 0;
-        int class_id = -1;
-        for (int c = 0; c < num_classes; ++c) {
-            float cls_score = (out[5 + c] - out_zp) * out_scale;
-            float conf = obj * cls_score;
-            if (conf > max_score) {
-                max_score = conf;
-                class_id = c;
-            }
-        }
-        if (max_score > box_conf_threshold) {
-            int x1 = (cx - 0.5f * w) / scale_w;
-            int y1 = (cy - 0.5f * h) / scale_h;
-            int box_w = w / scale_w;
-            int box_h = h / scale_h;
+    float* cx_data = output_data + 0 * num_anchors;
+    float* cy_data = output_data + 1 * num_anchors;
+    float* w_data = output_data + 2 * num_anchors;
+    float* h_data = output_data + 3 * num_anchors;
+    float* conf_data = output_data + 4 * num_anchors;
+
+    for (int i = 0; i < num_anchors; ++i) {
+        float confidence = conf_data[i];
+
+        if (confidence > box_conf_threshold) {
+            float cx = cx_data[i];
+            float cy = cy_data[i];
+            float w  = w_data[i];
+            float h  = h_data[i];
+
+            int x1 = static_cast<int>((cx - 0.5f * w) / scale_w);
+            int y1 = static_cast<int>((cy - 0.5f * h) / scale_h);
+            int box_w = static_cast<int>(w / scale_w);
+            int box_h = static_cast<int>(h / scale_h);
+
             boxes.push_back(cv::Rect(x1, y1, box_w, box_h));
-            confidences.push_back(max_score);
-            class_ids.push_back(class_id);
+            confidences.push_back(confidence);
+            class_ids.push_back(0);
         }
-        out += 5 + num_classes;
     }
 
     float nms_thresh = nms_threshold;
@@ -395,6 +419,20 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img) {
         det.color = cv::Scalar(0, 255, 0);
         detections.push_back(det);
     }
+    rknn_outputs_release(ctx, io_num.n_output, outputs);
+
     return detections;
+}
+
+void Detector::draw(cv::Mat &ori_img, const std::vector<Detection> &detections) {
+    for (const auto& det : detections) {
+        cv::rectangle(ori_img, det.box, det.color, 2);
+        std::string label = det.className + ": " + std::to_string(det.confidence);
+        cv::putText(ori_img, label, cv::Point(det.box.x, det.box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, det.color, 2);
+        std::cout << "size: " << detections.size() << std::endl;
+        std::cout << "box" << det.box << " "
+                  << "confidence: " << det.confidence << " "
+                  << "class_id: " << det.class_id << std::endl;
+    }
 }
 
