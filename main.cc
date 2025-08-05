@@ -1,4 +1,3 @@
-#include "pipeline.h"
 #include "manager.h"
 #include <string>
 
@@ -20,9 +19,4 @@ int main() {
     std::getline(std::cin, line);
     pipeline.stop();
 
-    // const char* img_path = "../busstop.jpg";
-    // img_inference(model_path, img_path);
-    // sync(model_path, input);
-    // const char* model_path = "../model/yolov8.rknn";
-    // async(model_path, input1);
 }

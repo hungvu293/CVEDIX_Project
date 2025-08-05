@@ -29,7 +29,6 @@ include_directories(
     ${OpenCV_INCLUDE_DIRS}
     ${OC_SORT_ROOT}/include
     ${OC_SORT_ROOT}/src
-    ${OC_SORT_ROOT}/detector
     ${Eigen3_INCLUDE_DIR}
     ${FFMPEG_INCLUDE_DIRS}
     ${CMAKE_CURRENT_SOURCE_DIR}/3rdparty/rga/include
@@ -42,7 +41,6 @@ file(GLOB ALL_SOURCE_FILES "${PROJECT_SOURCE_DIR}/*.cc")
 
 file(GLOB OC_SORT_SOURCE_FILES
     "${OC_SORT_ROOT}/src/*.cpp"
-    "${OC_SORT_ROOT}/detector/*.cpp"
 )
 
 add_library(project_core_lib STATIC

@@ -9,10 +9,8 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/dict.h>
-#include <libavutil/hwcontext_drm.h>
-#include <libdrm/drm_fourcc.h>
-#include <rga/RgaApi.h>
-#include <rga/rga.h>
+#include <libavutil/hwcontext.h>
+#include <libswscale/swscale.h>
 }
 
 class Reader {
@@ -21,7 +19,6 @@ public:
     ~Reader();
     
     bool isOpened = false;
-
     int open(const std::string& rtspUrl);
     int decodeFrame(cv::Mat& frame);
     void close();
@@ -31,14 +28,14 @@ private:
     AVCodecContext* pCodecContext = nullptr;
     const AVCodec* pCodec = nullptr;
     AVFrame* pFrame = nullptr;
-    uint8_t* rgbBuffer = nullptr;
-    int rgbBufferSize = 0;
     int videoStreamIndex = -1;
-
+    
+    // Conversion methods
+    int convert_rgb_software(AVFrame* frame, cv::Mat& output);
     cv::Mat convertAVFrameToMat(AVFrame* frame);
     enum AVPixelFormat getCurrentSwsFormat();
-    int convert_rgb(AVFrame* frame, uint8_t* rgb_buf);
-
+    
+    // Disable copy
     Reader(const Reader&) = delete;
     Reader& operator=(const Reader&) = delete;
 };

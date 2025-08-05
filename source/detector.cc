@@ -3,6 +3,8 @@
 #include <mutex>
 const int RK3566 = 1;
 
+std::mutex detector_mutex;
+
 static int get_core_num()
 {
     static int core_num = 0;
@@ -35,9 +37,23 @@ int resize_rga(rga_buffer_t &src, rga_buffer_t &dst, const cv::Mat &image, cv::M
     if (IM_STATUS_NOERROR != ret)
     {
         fprintf(stderr, "rga check error! %s", imStrError((IM_STATUS)ret));
+        releasebuffer_handle(src.handle);
+        releasebuffer_handle(dst.handle);
         return -1;
     }
     IM_STATUS STATUS = imresize(src, dst);
+
+    releasebuffer_handle(src.handle);
+    releasebuffer_handle(dst.handle);
+    
+    // Clear buffer structs
+    memset(&src, 0, sizeof(rga_buffer_t));
+    memset(&dst, 0, sizeof(rga_buffer_t));
+    
+    if (STATUS != IM_STATUS_SUCCESS) {
+        fprintf(stderr, "imresize failed! %s", imStrError(STATUS));
+        return -1;
+    }
     return 0;
 }
 
@@ -341,21 +357,24 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img) {
 
     float scale_w = (float)target_size.width / img_width;
     float scale_h = (float)target_size.height / img_height;
-
+    
+    // detector_mutex.lock();
     if (img_width != width || img_height != height) {
-        rga_buffer_t src;
-        rga_buffer_t dst;
-        memset(&src, 0, sizeof(src));
-        memset(&dst, 0, sizeof(dst));
-        ret = resize_rga(src, dst, ori_img, resized_img, target_size);
-        if (ret != 0) {
-            std::cerr << "resize rga error" << std::endl;
-        }
+        // rga_buffer_t src;
+        // rga_buffer_t dst;
+        // memset(&src, 0, sizeof(src));
+        // memset(&dst, 0, sizeof(dst));
+        // ret = resize_rga(src, dst, ori_img, resized_img, target_size);
+        // if (ret != 0) {
+        //     std::cerr << "resize rga error" << std::endl;
+        // }
+        cv::resize(ori_img, resized_img, target_size);
         inputs[0].buf = resized_img.data;
     }
     else {
         inputs[0].buf = ori_img.data;
     }
+    // detector_mutex.unlock();
 
     rknn_inputs_set(ctx, io_num.n_input, inputs);
 

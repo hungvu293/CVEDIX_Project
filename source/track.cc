@@ -24,28 +24,6 @@ Tracking::~Tracking() {
     std::cout << "Tracking object destroyed." << std::endl;
 }
 
-std::vector<Detection> Tracking::convert_output(object_detect_result_list* od_results) {
-    std::vector<Detection> output;
-    if (od_results == nullptr) {
-        return output;
-    }
-    for (int i = 0; i < od_results->count; i++) {
-        Detection detection;
-        detection.class_id = od_results->results[i].cls_id;
-        detection.className = std::string(od_results->results[i].name);
-        detection.confidence = od_results->results[i].prop;
-        detection.box = cv::Rect(
-            od_results->results[i].box.left,
-            od_results->results[i].box.top,
-            od_results->results[i].box.right - od_results->results[i].box.left,
-            od_results->results[i].box.bottom - od_results->results[i].box.top
-        );
-        detection.color = cv::Scalar(0, 255, 0);
-        output.push_back(detection);
-    }
-    return output;
-}
-
 std::vector<Eigen::RowVectorXf> Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
     if (output.empty()) {
         return std::vector<Eigen::RowVectorXf>();

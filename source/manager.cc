@@ -9,6 +9,7 @@
 Pipeline::Pipeline() {}
 
 int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
+    int ret;
     int cam_nb = rtsp_urls.size();
     if (cam_nb > 2) {
         std::cerr << "Only 2 cams max" << std::endl;
@@ -19,7 +20,6 @@ int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
         info.rtsp_titles[i] = "Camera " + std::to_string(i);
     }
 
-    int ret;
     for (int i = 0; i < cam_nb; i++) {
         readers[i] = std::make_unique<Reader>();
         ret = readers[i]->open(rtsp_urls[i]);
@@ -33,17 +33,13 @@ int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
         }
     }
 
-    const char* model_path = "../model/yolov8.rknn";
-    // detector = std::make_unique<YoloV8>();
-    // ret = detector->init(model_path);
-    // if (ret != 0) {
-    //     std::cerr << "Init model false" << std::endl;
-    //     return -1;
-    // }
-
-    int threadNum = 2;
-    rknnPool<YoloV8, cv::Mat, object_detect_result_list> pool(model_path, threadNum);
-    
+    const char* model_path = "../model/yolo11n_best_model-rk3566.rknn";
+    threadNum = 2;
+    pool = std::make_unique<rknnPool<Detector, cv::Mat, std::vector<Detection>>>(model_path, threadNum);
+    if (pool->init() != 0) {
+        std::cerr << "Init model pool false" << std::endl;
+        return -1;
+    }
 
     for (int i = 0; i < cam_nb; i++) {
         trackers[i] = std::make_unique<Tracking>();
@@ -58,12 +54,11 @@ void Pipeline::start() {
     for (int i = 0; i < is_camera_running.size(); i++) {
         decode_threads[i] = std::thread(&Pipeline::decodeLoop, this, i);
     }
-    detector_thread = std::thread(&Pipeline::detectLoop, this);
+    detector_thread = std::thread(&Pipeline::detectPoolLoop, this);
     for (int i = 0; i < is_camera_running.size(); i++) {
         tracking_threads[i] = std::thread(&Pipeline::trackLoop, this, i);
     }
     display_thread = std::thread(&Pipeline::displayLoop, this);
-    // message_thread = std::thread(&Pipeline::messageLoop, this);
     
 }
 
@@ -77,6 +72,11 @@ void Pipeline::stop() {
         if (thread.joinable()) {
             thread.join();
         }
+    }
+    while (true) {
+        std::vector<Detection> detections;
+        if (pool->get(detections) != 0)
+            break;
     }
     if (detector_thread.joinable()) {
         detector_thread.join();
@@ -99,7 +99,7 @@ void Pipeline::decodeLoop(int id) {
     
     int ret;
 
-    int drop_interval = 10;
+    int drop_interval = 5;
     int drop_frame_count = 0;
 
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
@@ -130,19 +130,23 @@ void Pipeline::decodeLoop(int id) {
                 is_camera_running[id].store(false);
                 continue;
             }
-
             drop_frame_count++;
             if (drop_frame_count < drop_interval) {
                 continue;
             }
             drop_frame_count = 0;
             // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+            std::cout << "done decode" << std::endl;
 
             if (!frame.empty()) {
                 capture_time = std::chrono::system_clock::now();
-                ReaderToInference data(frame, capture_time);
-                reader_to_inference_queues[id].push(data);
-                std::cout << "decode push: " << id << ", : " << reader_to_inference_queues[id].size() << std::endl;
+                ret = pool->put(frame);
+                if (ret != 0) {
+                    std::cerr << "pool put false" << std::endl;
+                    break;
+                }
+                pool_info_queue.push(std::make_tuple(id, capture_time, frame));
+                std::cout << "pool info size" << id << ": " <<  pool_info_queue.size() << std::endl;
             }
         }
     }
@@ -151,11 +155,15 @@ void Pipeline::decodeLoop(int id) {
 
 }
 
-void Pipeline::detectLoop() {
+void Pipeline::detectPoolLoop() {
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
+    int id;
+    std::vector<Detection> detections;
     int ret;
     bool any_camera_running = false;
+    int current_size = 0;
+
     while (is_system_running) {
         any_camera_running = false;
         for (int i = 0; i < is_camera_running.size(); i++) {
@@ -168,53 +176,39 @@ void Pipeline::detectLoop() {
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
-
+        
         for (int i = 0; i < is_camera_running.size(); i++) {
             if (!is_camera_running[i]) {
                 continue;
-            }
-            std::shared_ptr<ReaderToInference> data_ptr = reader_to_inference_queues[i].wait_and_pop();
-            if (!data_ptr) {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
-                continue;
-            }
-
-            frame = data_ptr->origin_frame;
-            capture_time = data_ptr->capture_time;        
-            ret = detector->run(frame);
-            if (ret != 0) {
-                std::cerr << "Detection failed for camera " << i << std::endl;
-                continue;   
-            }
-            detector->filter_class("person");
-
-            InferenceToTrack data(frame, capture_time, *detector->od_results);
-            inference_to_track_queues[i].push(data);
+            } 
         }
+        auto pool_info_ptr = pool_info_queue.wait_and_pop();
+        if (!pool_info_ptr) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
+        id = std::get<0>(*pool_info_ptr);
+        capture_time = std::get<1>(*pool_info_ptr);
+        frame = std::get<2>(*pool_info_ptr);
+
+        while (true) {
+            ret = pool->get(detections);
+            if (ret == 0) {
+                break; // Got result
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        InferenceToTrack data(frame, capture_time, detections);
+        inference_to_track_queues[id].push(data);
     }
-    std::cout << "Detection thread stopped." << std::endl;
+    std::cout << "Detection pool thread stop" << std::endl;
     return;
-}
-
-void Pipeline::detectPoolLoop() {
-    cv::Mat frame;
-    std::chrono::system_clock::time_point capture_time;
-    int ret;
-    bool any_camera_running = false;
-    while (is_system_running) {
-        any_camera_running = false;
-        for (int i = 0; i < is_camera_running.size(); i++) {
-            if (is_camera_running[i]) {
-                any_camera_running = true;
-                break;
-            }
-        }
 }
 
 void Pipeline::trackLoop(int id) {
     cv::Mat frame;
     std::chrono::system_clock::time_point capture_time;
-    object_detect_result_list od_results;
     std::vector<Detection> detections;
     std::vector<Eigen::RowVectorXf> res;
     int ret;
@@ -228,23 +222,16 @@ void Pipeline::trackLoop(int id) {
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             continue;
         }
-        // frame = data_ptr->origin_frame;
-        // capture_time = data_ptr->capture_time;
-        // od_results = data_ptr->od_results;
-        // if (data_ptr->origin_frame.empty())
-        // {
-        //     std::cout << "Empty frame detected for camera " << id << std::endl;
-        //     continue;
-        // }
+        frame = data_ptr->origin_frame;
+        capture_time = data_ptr->capture_time;
+        detections = data_ptr->detections;
 
-        detections = trackers[id]->convert_output(&data_ptr->od_results);
-        res = trackers[id]->run(data_ptr->origin_frame, detections);
-        trackers[id]->draw_tracks(data_ptr->origin_frame, res);
+        res = trackers[id]->run(frame, detections);
+        trackers[id]->draw_tracks(frame, res);
         
-        TrackToOSD data(data_ptr->origin_frame, data_ptr->capture_time);
+        TrackToOSD data(frame, capture_time);
         track_to_osd_queues[id].push(data);
         auto end_track_time = std::chrono::high_resolution_clock::now();
-
     }
     std::cout << "Tracking thread " << id << " stopped." << std::endl;
     return;
@@ -283,30 +270,24 @@ void Pipeline::displayLoop() {
             frames[i] = data_ptr->processed_frame;
             Tcapture[i] = data_ptr->capture_time;
             
-            // if (frames[i].empty())
-            // {
-            //     std::cout << "Empty frame detected for camera " << i << std::endl;
-            //     continue;
-            // }
-            
             Tcurrent = std::chrono::system_clock::now();
             // std::chrono::duration<double, std::milli> latency = Tcurrent - Tcapture[i];
             std::chrono::duration<double, std::milli> latency = Tcurrent - data_ptr->capture_time;
             std::cout << "Latency for camera " << i << ": " << latency.count() << " ms" << std::endl;
         }
 
-        // if (!frames[0].empty() && !frames[1].empty()) {
-        //     cv::Mat frame0_resized, frame1_resized;
-        //     cv::resize(frames[0], frame0_resized, cv::Size(1920, 540));
-        //     cv::resize(frames[1], frame1_resized, cv::Size(1920, 540));
-        //     cv::Mat concatenated_frame;
-        //     cv::vconcat(frame0_resized, frame1_resized, concatenated_frame);
-        //     display->show(concatenated_frame);
-        // }
-        // if (cv::waitKey(1) == 27) { // Exit on 'ESC' key
-        //     is_system_running.store(false);
-        //     break;
-        // }
+        if (!frames[0].empty() && !frames[1].empty()) {
+            cv::Mat frame0_resized, frame1_resized;
+            cv::resize(frames[0], frame0_resized, cv::Size(1920, 540));
+            cv::resize(frames[1], frame1_resized, cv::Size(1920, 540));
+            cv::Mat concatenated_frame;
+            cv::vconcat(frame0_resized, frame1_resized, concatenated_frame);
+            display->show(concatenated_frame);
+        }
+        if (cv::waitKey(1) == 27) { // Exit on 'ESC' key
+            is_system_running.store(false);
+            break;
+        }
 
     }
     std::cout << "Display thread stopped." << std::endl;

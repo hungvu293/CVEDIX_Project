@@ -81,7 +81,7 @@ template <typename rknnModel, typename inputType, typename outputType>
 int rknnPool<rknnModel, inputType, outputType>::put(inputType inputData)
 {
     std::lock_guard<std::mutex> lock(queueMtx);
-    futs.push(pool->submit(&rknnModel::run, models[this->getModelId()], inputData));
+    futs.push(pool->submit(&rknnModel::infer, models[this->getModelId()], inputData));
     return 0;
 }
 

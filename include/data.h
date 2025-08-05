@@ -10,7 +10,8 @@
 #include <chrono>
 #include "opencv2/opencv.hpp"
 
-#include "yolov8.h"
+// #include "yolov8.h"
+#include "detector.h"
 #include "track.h"
 
 template<typename T>
@@ -141,9 +142,9 @@ struct ReaderToInference {
 struct InferenceToTrack {
     cv::Mat origin_frame;
     std::chrono::system_clock::time_point capture_time;
-    object_detect_result_list od_results;
-    InferenceToTrack(cv::Mat& frame, std::chrono::system_clock::time_point time, object_detect_result_list od_results) 
-        : origin_frame(frame.clone()), capture_time(time), od_results(od_results) {};
+    std::vector<Detection> detections;
+    InferenceToTrack(cv::Mat& frame, std::chrono::system_clock::time_point time, std::vector<Detection> detections) 
+        : origin_frame(frame.clone()), capture_time(time), detections(detections) {};
 };
 
 struct TrackToOSD {

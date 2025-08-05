@@ -43,7 +43,7 @@ private:
     int img_width, img_height;
 
     float nms_threshold {0.5};
-    float box_conf_threshold {0.5};
+    float box_conf_threshold {0.2};
     std::vector<std::string> classes{"plate"};
 public:
     Detector(const std::string &model_path);

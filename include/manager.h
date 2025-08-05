@@ -11,7 +11,8 @@
 
 #include "manager.h"
 #include "data.h"
-#include "yolov8.h"
+// #include "yolov8.h"
+#include "detector.h"
 #include "track.h"
 #include "reader.h"
 #include "osd.h"
@@ -29,15 +30,19 @@ struct ReaderInfo {
 
 class Pipeline {
 private:
+    int threadNum;
+
     // Object holders
     std::array<std::unique_ptr<Reader>, 2> readers;
-    std::unique_ptr<YoloV8> detector;
+    // std::unique_ptr<YoloV8> detector;
+    std::unique_ptr<rknnPool<Detector, cv::Mat, std::vector<Detection>>> pool;
     std::array<std::unique_ptr<Tracking>, 2> trackers;
     std::unique_ptr<OSD> display;
     // std::unique_ptr<MQTT> message;
 
     //Data holders
-    std::array<lock_based_queue<ReaderToInference>, 2> reader_to_inference_queues;
+    // std::array<lock_based_queue<ReaderToInference>, 2> reader_to_inference_queues;
+    lock_based_queue<std::tuple<int, std::chrono::system_clock::time_point, cv::Mat>> pool_info_queue;
     std::array<lock_based_queue<InferenceToTrack>, 2> inference_to_track_queues;
     std::array<lock_based_queue<TrackToOSD>, 2> track_to_osd_queues;
     //MQTT message
@@ -66,8 +71,8 @@ public:
 
 private:
     void decodeLoop(int id);
-    void detectLoop();
-    void detectPoolLop();
+    // void detectLoop();
+    void detectPoolLoop();
     void trackLoop(int id);
     void displayLoop();
     void messageLoop();
