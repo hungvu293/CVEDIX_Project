@@ -10,7 +10,6 @@
 #include <chrono>
 #include "opencv2/opencv.hpp"
 
-// #include "yolov8.h"
 #include "detector.h"
 #include "track.h"
 
@@ -132,26 +131,19 @@ public:
     }
 };
 
-struct ReaderToInference {
-    cv::Mat origin_frame;
-    std::chrono::system_clock::time_point capture_time;
-    ReaderToInference(cv::Mat& frame, std::chrono::system_clock::time_point time) 
-        : origin_frame(frame.clone()), capture_time(time) {};
-};
-
 struct InferenceToTrack {
     cv::Mat origin_frame;
     std::chrono::system_clock::time_point capture_time;
     std::vector<Detection> detections;
-    InferenceToTrack(cv::Mat& frame, std::chrono::system_clock::time_point time, std::vector<Detection> detections) 
-        : origin_frame(frame.clone()), capture_time(time), detections(detections) {};
+    InferenceToTrack(cv::Mat frame, std::chrono::system_clock::time_point time, std::vector<Detection> detections) 
+        : origin_frame(std::move(frame)), capture_time(time), detections(std::move(detections)) {};
 };
 
 struct TrackToOSD {
     cv::Mat processed_frame;
     std::chrono::system_clock::time_point capture_time;
-    TrackToOSD(cv::Mat& frame, std::chrono::system_clock::time_point time) 
-        : processed_frame(frame.clone()), capture_time(time) {};
+    TrackToOSD(cv::Mat frame, std::chrono::system_clock::time_point time) 
+        : processed_frame(std::move(frame)), capture_time(time) {};
 };
 
 #endif 

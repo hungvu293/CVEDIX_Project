@@ -8,9 +8,10 @@ project(inference CXX)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 CONFIG REQUIRED)
 find_package(PkgConfig QUIET)
+find_package(Crow)
 
 if(PKG_CONFIG_FOUND)
-    pkg_check_modules(FFMPEG REQUIRED opencv4 libavcodec libavformat libavutil libswscale)
+    pkg_check_modules(FFMPEG REQUIRED opencv4 libavcodec libavformat libavutil libswscale libavfilter)
     if(NOT FFMPEG_FOUND)
         message(FATAL_ERROR "FFmpeg not found. Please ensure pkg-config can find it.")
     endif()
@@ -53,16 +54,25 @@ target_link_libraries(project_core_lib
 )
 
 set(MAIN_SOURCE ${CMAKE_CURRENT_SOURCE_DIR}/main.cc)
-add_executable(inference ${MAIN_SOURCE})
+add_executable(inference
+    ${MAIN_SOURCE}
+    # source/detector8.cc
+)
 
 target_link_libraries(inference
     project_core_lib      
     ${OpenCV_LIBS}        
-    ${FFMPEG_LIBRARIES}   
+    avcodec
+    avformat
+    avutil
+    swscale
+    avfilter
     ${RKNN_RUNTIME_LIB}   
     ${RGA_RUNTIME_LIB_SO} 
     ${RGA_RUNTIME_LIB_A}  
+    Crow::Crow
 )
+
 
 find_package(Git QUIET)
 if(GIT_FOUND)

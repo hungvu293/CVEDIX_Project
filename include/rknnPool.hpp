@@ -81,18 +81,23 @@ template <typename rknnModel, typename inputType, typename outputType>
 int rknnPool<rknnModel, inputType, outputType>::put(inputType inputData)
 {
     std::lock_guard<std::mutex> lock(queueMtx);
-    futs.push(pool->submit(&rknnModel::infer, models[this->getModelId()], inputData));
+    futs.push(pool->submit(&rknnModel::infer_meta, models[this->getModelId()], inputData));
     return 0;
 }
 
 template <typename rknnModel, typename inputType, typename outputType>
 int rknnPool<rknnModel, inputType, outputType>::get(outputType &outputData)
 {
-    std::lock_guard<std::mutex> lock(queueMtx);
-    if(futs.empty() == true)
-        return 1;
-    outputData = futs.front().get();
-    futs.pop();
+    std::future<outputType> fut;
+    {
+        std::lock_guard<std::mutex> lock(queueMtx);
+        if(futs.empty() == true)
+            return 1;
+        std::cout << "Pool size: " << futs.size() << std::endl;
+        fut = std::move(futs.front());
+        futs.pop();
+    }
+    outputData = fut.get();
     return 0;
 }
 

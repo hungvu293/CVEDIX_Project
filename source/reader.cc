@@ -1,253 +1,200 @@
-#include "reader.h" 
-#include <iostream>
-#include <opencv2/opencv.hpp>
+#include "reader.h"
 
-extern "C" {
-#include <libavutil/hwcontext_drm.h>
-#include <libavutil/pixfmt.h>
-#include <libavutil/hwcontext.h>
-#include <libswscale/swscale.h>
-}
-
-enum AVPixelFormat get_format(AVCodecContext *Context, const enum AVPixelFormat *PixFmt)
-{
-    while (*PixFmt != AV_PIX_FMT_NONE) {
-        if (*PixFmt == AV_PIX_FMT_DRM_PRIME)
-            return AV_PIX_FMT_DRM_PRIME;
-        PixFmt++;
-    }
-    return AV_PIX_FMT_NONE;
-}
-
-Reader::Reader() {
-    avformat_network_init();
-    av_log_set_level(AV_LOG_ERROR);
-}
+Reader::Reader() : fmt_ctx(nullptr), dec_ctx(nullptr), dec(nullptr), pkt(nullptr), frame(nullptr), sw_frame(nullptr),
+                   sws_ctx(nullptr), hw_device_ctx(nullptr), video_stream_idx(-1), rgb_buf(nullptr), rgb_bufsize(0), isOpened(false) {}
 
 Reader::~Reader() {
     close();
 }
 
-int Reader::open(const std::string& rtspUrl) {
-    if (isOpened) {
-        std::cerr << "Reader already opened. Please close first." << std::endl;
-        return -1;
-    }
-    
-    AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "buffer_size", "2048000", 0);
-    av_dict_set(&opts, "analyzeduration", "5000000", 0);
-    av_dict_set(&opts, "probesize", "5000000", 0);
-    av_dict_set(&opts, "rtsp_transport", "tcp", 0);
-    av_dict_set(&opts, "max_delay", "5000000", 0);
-    av_dict_set(&opts, "stimeout", "5000000", 0);
+void Reader::print_error(const char *msg, int err) {
+    char errbuf[128];
+    av_strerror(err, errbuf, sizeof(errbuf));
+    fprintf(stderr, "%s: %s\n", msg, errbuf);
+}
 
-    if (avformat_open_input(&pFormatContext, rtspUrl.c_str(), nullptr, &opts) < 0) {
-        std::cerr << "Could not open RTSP stream: " << rtspUrl << std::endl;
+int Reader::open(std::string& input_url) {
+    av_log_set_level(AV_LOG_INFO);
+    int ret = 0;
+
+    AVDictionary *opts = NULL;
+    av_dict_set(&opts, "rtsp_transport", "tcp", 0);
+    if ((ret = avformat_open_input(&fmt_ctx, input_url.c_str(), NULL, &opts)) < 0) {
+        print_error("Cannot open input", ret);
         av_dict_free(&opts);
-        return -1;
+        close();
+        return ret;
     }
     av_dict_free(&opts);
 
-    if (avformat_find_stream_info(pFormatContext, nullptr) < 0) {
-        std::cerr << "Could not find stream information." << std::endl;
+    if ((ret = avformat_find_stream_info(fmt_ctx, NULL)) < 0) {
+        print_error("Cannot find stream info", ret);
         close();
-        return -1;
+        return ret;
     }
 
-    videoStreamIndex = -1;
-    for (unsigned int i = 0; i < pFormatContext->nb_streams; i++) {
-        if (pFormatContext->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
-            videoStreamIndex = i;
+    for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
+        if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
+            video_stream_idx = i;
             break;
         }
     }
-
-    if (videoStreamIndex == -1) {
-        std::cerr << "Did not find a video stream." << std::endl;
+    if (video_stream_idx < 0) {
+        fprintf(stderr, "No video stream found\n");
         close();
-        return -1;
+        return AVERROR_STREAM_NOT_FOUND;
     }
 
-    AVCodecParameters* pCodecPar = pFormatContext->streams[videoStreamIndex]->codecpar;
-    
-    // Try software decoder first to avoid hardware issues
-    pCodec = avcodec_find_decoder(pCodecPar->codec_id);
-    if (pCodec) {
-        std::cout << "Using software decoder: " << pCodec->name << std::endl;
-    } else {
-        std::cerr << "Unsupported codec!" << std::endl;
-        close();
-        return -1;
+    const char *prefer_decoder = "h264_rkmpp";
+    dec = avcodec_find_decoder_by_name(prefer_decoder);
+    if (!dec) {
+        dec = avcodec_find_decoder(fmt_ctx->streams[video_stream_idx]->codecpar->codec_id);
+        if (!dec) {
+            fprintf(stderr, "No suitable decoder found\n");
+            close();
+            return AVERROR_DECODER_NOT_FOUND;
+        }
     }
 
-    pCodecContext = avcodec_alloc_context3(pCodec);
-    if (!pCodecContext) {
-        std::cerr << "Failed to allocate AVCodecContext." << std::endl;
+    dec_ctx = avcodec_alloc_context3(dec);
+    if (!dec_ctx) {
         close();
-        return -1;
+        return AVERROR(ENOMEM);
+    }
+    if ((ret = avcodec_parameters_to_context(dec_ctx, fmt_ctx->streams[video_stream_idx]->codecpar)) < 0) {
+        print_error("Failed to copy codec parameters", ret);
+        close();
+        return ret;
     }
 
-    if (avcodec_parameters_to_context(pCodecContext, pCodecPar) < 0) {
-        std::cerr << "Failed to copy codec parameters to decoder context." << std::endl;
-        close();
-        return -1;
+    AVHWDeviceType hw_type = av_hwdevice_find_type_by_name("rkmpp");
+    if (hw_type != AV_HWDEVICE_TYPE_NONE) {
+        ret = av_hwdevice_ctx_create(&hw_device_ctx, hw_type, NULL, NULL, 0);
+        if (ret >= 0) {
+            dec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+        } else {
+            print_error("Warning: cannot create rkmpp hw device", ret);
+            av_buffer_unref(&hw_device_ctx);
+            hw_device_ctx = NULL;
+        }
     }
 
-    std::cout << "[open] pCodecContext: width=" << pCodecContext->width
-              << ", height=" << pCodecContext->height
-              << ", pix_fmt=" << pCodecContext->pix_fmt << std::endl;
-
-    // Use software decoding to avoid DRM/RGA issues
-    AVDictionary* codecOpts = nullptr;
-    av_dict_set(&codecOpts, "threads", "auto", 0);
-
-    if (avcodec_open2(pCodecContext, pCodec, &codecOpts) < 0) {
-        std::cerr << "Failed to open codec." << std::endl;
-        av_dict_free(&codecOpts);
+    if ((ret = avcodec_open2(dec_ctx, dec, NULL)) < 0) {
+        print_error("Failed to open codec", ret);
         close();
-        return -1;
-    }
-    av_dict_free(&codecOpts);
-
-    pFrame = av_frame_alloc();
-    if (!pFrame) {
-        std::cerr << "Failed to allocate AVFrame." << std::endl;
-        close();
-        return -1;
+        return ret;
     }
 
+    pkt = av_packet_alloc();
+    frame = av_frame_alloc();
+    sw_frame = av_frame_alloc();
+    if (!pkt || !frame || !sw_frame) {
+        close();
+        return AVERROR(ENOMEM);
+    }
+
+    rtsp_url = input_url;
     isOpened = true;
-    return 0;
-}
-static std::mutex sws_mutex;
-
-int Reader::convert_rgb_software(AVFrame* frame, cv::Mat& output) {
-    if (!frame) {
-        return -1;
-    }
-    std::lock_guard<std::mutex> lock(sws_mutex);
-    static struct SwsContext* swsContext = nullptr;
-    
-    int width = frame->width;
-    int height = frame->height;
-    
-    // Initialize swscale context
-    swsContext = sws_getCachedContext(swsContext,
-                                    width, height, (AVPixelFormat)frame->format,
-                                    width, height, AV_PIX_FMT_BGR24,
-                                    SWS_BILINEAR, nullptr, nullptr, nullptr);
-    
-    if (!swsContext) {
-        std::cerr << "Failed to initialize swscale context" << std::endl;
-        return -1;
-    }
-    
-    // Create output Mat
-    output = cv::Mat(height, width, CV_8UC3);
-    
-    uint8_t* dst_data[4] = { output.data };
-    int dst_linesize[4] = { static_cast<int>(output.step[0]) };
-    
-    // Convert
-    sws_scale(swsContext, frame->data, frame->linesize,
-              0, height, dst_data, dst_linesize);
-    
+    lastFrameTime = std::chrono::steady_clock::now();
     return 0;
 }
 
-int Reader::decodeFrame(cv::Mat& frame) {
-    if (!isOpened) {
-        std::cerr << "Reader is not opened. Call open() first." << std::endl;
-        return -1;
+int Reader::decodeFrame(cv::Mat& outFrame) {
+    int ret = 0;
+
+    if ((ret = av_read_frame(fmt_ctx, pkt)) < 0) {
+        close();
+        return ret;
     }
 
-    AVPacket* packet = av_packet_alloc();
-    if (!packet) {
-        std::cerr << "Failed to allocate packet" << std::endl;
-        return -1;
-    }
+    if (pkt->stream_index == video_stream_idx) {
+        ret = avcodec_send_packet(dec_ctx, pkt);
+        if (ret < 0) {
+            print_error("Error sending packet", ret);
+            av_packet_unref(pkt);
+            close();
+            return ret;
+        }
 
-    int frameCount = 0;
-    const int maxFrameAttempts = 10; 
+        while ((ret = avcodec_receive_frame(dec_ctx, frame)) >= 0) {
+            AVFrame *convert_src = nullptr;
+            if (frame->hw_frames_ctx || av_pix_fmt_desc_get((AVPixelFormat)frame->format)->flags & AV_PIX_FMT_FLAG_HWACCEL) {
+                ret = av_hwframe_transfer_data(sw_frame, frame, 0);
+                if (ret < 0) {
+                    print_error("Failed to transfer hw frame", ret);
+                    av_frame_unref(frame);
+                    continue;
+                }
+                convert_src = sw_frame;
+            } else {
+                convert_src = frame;
+            }
 
-    while (av_read_frame(pFormatContext, packet) >= 0 && frameCount < maxFrameAttempts) {
-        frameCount++;
-        
-        if (packet->stream_index == videoStreamIndex) {
-            int response = avcodec_send_packet(pCodecContext, packet);
-            if (response < 0) {
-                std::cerr << "Error while sending a packet to the decoder: " << response << std::endl;
-                av_packet_unref(packet);
+            int src_w = convert_src->width;
+            int src_h = convert_src->height;
+            enum AVPixelFormat src_fmt = (enum AVPixelFormat)convert_src->format;
+            enum AVPixelFormat dst_fmt = AV_PIX_FMT_RGB24;
+
+            // Frame skipping logic
+            auto now = std::chrono::steady_clock::now();
+            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFrameTime).count();
+            if (elapsedMs < targetIntervalMs) {
+                av_frame_unref(frame);
+                av_packet_unref(pkt);
                 continue;
             }
+            lastFrameTime = now;
 
-            while (response >= 0) {
-                response = avcodec_receive_frame(pCodecContext, pFrame);
-                if (response == AVERROR(EAGAIN) || response == AVERROR_EOF) {
-                    break;
-                } else if (response < 0) {
-                    std::cerr << "Error while receiving a frame from the decoder: " << response << std::endl;
-                    break;
-                }
-
-                if (pFrame->width <= 0 || pFrame->height <= 0) {
-                    std::cerr << "Invalid frame dimensions: " << pFrame->width << "x" << pFrame->height << std::endl;
-                    continue;
-                }
-
-                // Use software conversion
-                if (convert_rgb_software(pFrame, frame) == 0) {
-
-                    av_packet_unref(packet);
-                    av_packet_free(&packet);
-                    return 0; // Successfully decoded and converted frame
-                } else {
-                    std::cerr << "Software conversion failed" << std::endl;
-                    av_packet_unref(packet);
-                    av_packet_free(&packet);
-                    continue;
+            if (!sws_ctx) {
+                sws_ctx = sws_getContext(src_w, src_h, src_fmt,
+                                         src_w, src_h, dst_fmt,
+                                         SWS_BILINEAR, NULL, NULL, NULL);
+                if (!sws_ctx) {
+                    close();
+                    return AVERROR(EINVAL);
                 }
             }
+
+            int needed = av_image_get_buffer_size(dst_fmt, src_w, src_h, 1);
+            if (needed != rgb_bufsize) {
+                av_freep(&rgb_buf);
+                rgb_buf = (uint8_t*)av_malloc(needed);
+                rgb_bufsize = needed;
+            }
+
+            uint8_t *dst_data[4] = {0};
+            int dst_linesizes[4] = {0};
+            av_image_fill_arrays(dst_data, dst_linesizes, rgb_buf, dst_fmt, src_w, src_h, 1);
+
+            sws_scale(sws_ctx,
+                      (const uint8_t * const*)convert_src->data,
+                      convert_src->linesize,
+                      0, src_h,
+                      dst_data, dst_linesizes);
+
+            // Convert to cv::Mat
+            outFrame = cv::Mat(src_h, src_w, CV_8UC3, dst_data[0], dst_linesizes[0]).clone();
+
+            std::cout << "Decoded frame from: " << rtsp_url << std::endl;
+
+            av_frame_unref(frame);
+            av_frame_unref(sw_frame);
         }
-        av_packet_unref(packet);
     }
 
-    av_packet_free(&packet);
-    
-    if (frameCount >= maxFrameAttempts) {
-        std::cerr << "Max frame attempts reached, stream might be problematic." << std::endl;
-    }
-
-    return -1; 
-}
-
-cv::Mat Reader::convertAVFrameToMat(AVFrame* frame) {
-    int width = frame->width > 0 ? frame->width : pCodecContext->width;
-    int height = frame->height > 0 ? frame->height : pCodecContext->height;
-    
-    cv::Mat mat(height, width, CV_8UC3, frame->data[0], frame->linesize[0]);
-    return mat.clone();
-}
-
-enum AVPixelFormat Reader::getCurrentSwsFormat() {
-    return (AVPixelFormat)pCodecContext->pix_fmt; 
+    av_packet_unref(pkt);
+    return 0;
 }
 
 void Reader::close() {
-    if (pFrame) {
-        av_frame_free(&pFrame);
-        pFrame = nullptr;
-    }
-    if (pCodecContext) {
-        avcodec_free_context(&pCodecContext);
-        pCodecContext = nullptr;
-    }
-    if (pFormatContext) {
-        avformat_close_input(&pFormatContext);
-        pFormatContext = nullptr;
-    }
-    avformat_network_deinit(); 
+    if (rgb_buf) av_freep(&rgb_buf);
+    if (sws_ctx) sws_freeContext(sws_ctx);
+    av_frame_free(&sw_frame);
+    av_frame_free(&frame);
+    av_packet_free(&pkt);
+    avcodec_free_context(&dec_ctx);
+    av_buffer_unref(&hw_device_ctx);
+    if (fmt_ctx) avformat_close_input(&fmt_ctx);
     isOpened = false;
-    std::cout << "Reader closed and resources freed." << std::endl;
 }
+
