@@ -24,10 +24,16 @@ Tracking::~Tracking() {
     std::cout << "Tracking object destroyed." << std::endl;
 }
 
-std::vector<Eigen::RowVectorXf> Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
+void Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
     if (output.empty()) {
-        return std::vector<Eigen::RowVectorXf>();
+        if (size(oc_sort_tracker.trackers) != 0) {
+            for (int i = 0; i < size(oc_sort_tracker.trackers); i++) {
+                oc_sort_tracker.trackers[i].predict();
+                oc_sort_tracker.trackers[i].update(nullptr, 0);
+            }
+        }
     }
+    return;
     
     std::vector<std::vector<float>> data;
     cv::Rect box;
@@ -48,17 +54,17 @@ std::vector<Eigen::RowVectorXf> Tracking::run(cv::Mat& frame, std::vector<Detect
     std::vector<Eigen::RowVectorXf> res = oc_sort_tracker.update(Vector2Matrix(data));
     data.clear();
 
-    return res;
+    return;
 }
 
-void Tracking::draw_tracks(cv::Mat& frame, std::vector<Eigen::RowVectorXf>& res) {
-    if (res.empty())
-        return;
-    for (auto j : res) {
-        int ID = int(j[4]);
-        int Class = int(j[5]);
-        float conf = j[6];
-        cv::putText(frame, cv::format("ID:%d", ID), cv::Point(j[0], j[1] - 5), 0, 0.5, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
-        cv::rectangle(frame, cv::Rect(j[0], j[1], j[2] - j[0] + 1, j[3] - j[1] + 1), cv::Scalar(j(7), j(8), j(9)), 1);
+void Tracking::draw_tracks(cv::Mat& frame) {
+    std::cout << "track size" << oc_sort_tracker.trackers.size() << std::endl;
+    for (auto trk : oc_sort_tracker.trackers) {
+        Eigen::Matrix<float, 1, 4> d;
+        d = trk.get_state();
+        cv::Rect box(d(0), d(1), d(2) - d(0) + 1, d(3) - d(1) + 1);
+
+        // cv::putText(frame, cv::format("ID:%d", trk.id), cv::Point(d(0), d(1) - 5), 0, 0.5, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+        cv::rectangle(frame, box, cv::Scalar(trk.color[0], trk.color[1], trk.color[2]), 2);
     }
 }

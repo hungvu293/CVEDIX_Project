@@ -19,6 +19,7 @@ private:
     mutable std::mutex mut;
     std::queue<std::shared_ptr<T>> data_queue;
     std::condition_variable data_cond;
+    size_t max_size {10};
 
 public:
     lock_based_queue() = default;
@@ -64,6 +65,9 @@ public:
     void push(T new_value) {
         std::shared_ptr<T> data = std::make_shared<T>(std::move(new_value));
         std::lock_guard<std::mutex> lk(mut);
+        if (max_size > 0 && data_queue.size() >= max_size) {
+            data_queue.pop(); // Remove the oldest element
+        }
         data_queue.push(data);
         data_cond.notify_one();
     }
@@ -146,4 +150,4 @@ struct TrackToOSD {
         : processed_frame(std::move(frame)), capture_time(time) {};
 };
 
-#endif 
+#endif

@@ -22,7 +22,7 @@ public:
     Reader();
     ~Reader();
     bool isOpened = false;
-    int open(std::string& input_url);
+    int open(const std::string& input_url, bool use_hw = false);
     int decodeFrame(cv::Mat& frame);
     void close();
 
@@ -43,7 +43,7 @@ private:
     std::string rtsp_url; // store RTSP link
 
     std::chrono::steady_clock::time_point lastFrameTime;
-    const int targetIntervalMs = 500;
+    const int targetIntervalMs = 150;
 };
 
 #endif // READER_H

@@ -13,12 +13,16 @@ void Reader::print_error(const char *msg, int err) {
     fprintf(stderr, "%s: %s\n", msg, errbuf);
 }
 
-int Reader::open(std::string& input_url) {
+int Reader::open(const std::string& input_url, bool use_hw) {
     av_log_set_level(AV_LOG_INFO);
+    // av_log_set_level(AV_LOG_DEBUG);
+
     int ret = 0;
 
     AVDictionary *opts = NULL;
     av_dict_set(&opts, "rtsp_transport", "tcp", 0);
+    av_dict_set(&opts, "max_delay", "100000", 0); // 100ms max delay
+    av_dict_set(&opts, "fflags", "nobuffer", 0);   // Do not buffer packets
     if ((ret = avformat_open_input(&fmt_ctx, input_url.c_str(), NULL, &opts)) < 0) {
         print_error("Cannot open input", ret);
         av_dict_free(&opts);
@@ -45,8 +49,16 @@ int Reader::open(std::string& input_url) {
         return AVERROR_STREAM_NOT_FOUND;
     }
 
-    const char *prefer_decoder = "h264_rkmpp";
-    dec = avcodec_find_decoder_by_name(prefer_decoder);
+    if (use_hw) {
+        const char *prefer_decoder = "h264_rkmpp";
+        dec = avcodec_find_decoder_by_name(prefer_decoder);
+        if (dec) {
+            fprintf(stdout, "Using hardware decoder: %s\n", prefer_decoder);
+        } else {
+            fprintf(stderr, "Hardware decoder %s not found, falling back to software decoder.\n", prefer_decoder);
+        }
+    }
+
     if (!dec) {
         dec = avcodec_find_decoder(fmt_ctx->streams[video_stream_idx]->codecpar->codec_id);
         if (!dec) {
@@ -54,6 +66,7 @@ int Reader::open(std::string& input_url) {
             close();
             return AVERROR_DECODER_NOT_FOUND;
         }
+        fprintf(stdout, "Using software decoder: %s\n", dec->name);
     }
 
     dec_ctx = avcodec_alloc_context3(dec);
@@ -67,15 +80,20 @@ int Reader::open(std::string& input_url) {
         return ret;
     }
 
-    AVHWDeviceType hw_type = av_hwdevice_find_type_by_name("rkmpp");
-    if (hw_type != AV_HWDEVICE_TYPE_NONE) {
-        ret = av_hwdevice_ctx_create(&hw_device_ctx, hw_type, NULL, NULL, 0);
-        if (ret >= 0) {
-            dec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+    if (use_hw) {
+        AVHWDeviceType hw_type = av_hwdevice_find_type_by_name("rkmpp");
+        if (hw_type != AV_HWDEVICE_TYPE_NONE) {
+            ret = av_hwdevice_ctx_create(&hw_device_ctx, hw_type, NULL, NULL, 0);
+            if (ret >= 0) {
+                dec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
+                fprintf(stdout, "Created rkmpp hw device context.\n");
+            } else {
+                print_error("Warning: cannot create rkmpp hw device", ret);
+                av_buffer_unref(&hw_device_ctx);
+                hw_device_ctx = NULL;
+            }
         } else {
-            print_error("Warning: cannot create rkmpp hw device", ret);
-            av_buffer_unref(&hw_device_ctx);
-            hw_device_ctx = NULL;
+            fprintf(stderr, "rkmpp hw device type not found.\n");
         }
     }
 
@@ -141,6 +159,7 @@ int Reader::decodeFrame(cv::Mat& outFrame) {
             if (elapsedMs < targetIntervalMs) {
                 av_frame_unref(frame);
                 av_packet_unref(pkt);
+                // std::cout << "drop frame" << std::endl;
                 continue;
             }
             lastFrameTime = now;
@@ -175,7 +194,7 @@ int Reader::decodeFrame(cv::Mat& outFrame) {
             // Convert to cv::Mat
             outFrame = cv::Mat(src_h, src_w, CV_8UC3, dst_data[0], dst_linesizes[0]).clone();
 
-            std::cout << "Decoded frame from: " << rtsp_url << std::endl;
+            // std::cout << "Decoded frame from: " << rtsp_url << std::endl;
 
             av_frame_unref(frame);
             av_frame_unref(sw_frame);
