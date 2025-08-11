@@ -189,11 +189,15 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img)
         //     std::cerr << "resize rga error" << std::endl;
         // }
         cv::resize(ori_img, resized_img, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
-        inputs[0].buf = resized_img.data;
     }
     else {
-        inputs[0].buf = ori_img.data;
+        resized_img = ori_img;
     }
+    inputs[0].buf = resized_img.data;
+
+    // cv::imwrite("../rga_img.jpg", resized_img);
+    // std::cout << "done write resize img" << std::endl;
+
     // detector_mutex.unlock();
     auto end_resize = std::chrono::steady_clock::now();
 
@@ -329,7 +333,7 @@ int Detector::postprocess(rknn_output* outputs, float scale_w, float scale_h, fl
         last_count++;
     }
     od_results->count = last_count;
-    std::cout << "number" << od_results->count;
+    std::cout << "detections number: " << od_results->count << std::endl;
     // printf("[LOG] Detector::postprocess - Postprocessing finished, final count: %d\n", last_count);
     return 0;
 }
@@ -532,50 +536,91 @@ static int quick_sort_indice_inverse(std::vector<float> &input, int left, int ri
     return low;
 }
 
-static int resize_rga(const cv::Mat &image, cv::Mat &resized_image) {
-    rga_buffer_t src_img, dst_img;
-    int src_width = image.rows;
-    int src_height = image.cols;
-    int src_format = RK_FORMAT_RGB_888;
+// static int resize_rga(const cv::Mat &image, cv::Mat &resized_image) {
+//     rga_buffer_t src_img, dst_img;
+//     int src_width = image.rows;
+//     int src_height = image.cols;
+//     int src_format = RK_FORMAT_RGB_888;
 
-    int dst_width = resized_image.rows;
-    int dst_height = resized_image.cols;
-    int dst_format = RK_FORMAT_RGB_888;
+//     int dst_width = resized_image.rows;
+//     int dst_height = resized_image.cols;
+//     int dst_format = RK_FORMAT_RGB_888;
     
-    int src_buf_size = src_width * src_height * get_bpp_from_format(src_format);
-    int dst_buf_size = dst_width * dst_height * get_bpp_from_format(dst_format);
+//     int src_buf_size = src_width * src_height * get_bpp_from_format(src_format);
+//     int dst_buf_size = dst_width * dst_height * get_bpp_from_format(dst_format);
 
-    char* src_buf = nullptr;
-    char* dst_buf = nullptr;
-    src_buf = (char*)malloc(src_buf_size);
-    dst_buf = (char*)malloc(dst_buf_size);
+//     char* src_buf = nullptr;
+//     char* dst_buf = nullptr;
+//     src_buf = (char*)malloc(src_buf_size);
+//     dst_buf = (char*)malloc(dst_buf_size);
 
-    memcpy(src_buf, image.data, src_buf_size);
+//     memcpy(src_buf, image.data, src_buf_size);
 
-    rga_buffer_handle_t src_handle = 0;
-    rga_buffer_handle_t dst_handle = 0;
-    src_handle = importbuffer_virtualaddr(src_buf, src_buf_size);
-    dst_handle = importbuffer_virtualaddr(dst_buf, dst_buf_size);
+//     rga_buffer_handle_t src_handle = 0;
+//     rga_buffer_handle_t dst_handle = 0;
+//     src_handle = importbuffer_virtualaddr(src_buf, src_buf_size);
+//     dst_handle = importbuffer_virtualaddr(dst_buf, dst_buf_size);
 
-    src_img = wrapbuffer_handle(src_handle, src_width, src_height, src_format);
-    dst_img = wrapbuffer_handle(dst_handle, dst_width, dst_height, dst_format);
+//     src_img = wrapbuffer_handle(src_handle, src_width, src_height, src_format);
+//     dst_img = wrapbuffer_handle(dst_handle, dst_width, dst_height, dst_format);
 
-    int ret = imresize(src_img, dst_img, (float)dst_width / src_width, (float)dst_height / src_height);
-    if (ret != IM_STATUS_SUCCESS) {
-        std::cerr << "RGA resize error: " << imStrError((IM_STATUS)ret) << "\n";
-        if (src_handle) releasebuffer_handle(src_handle);
-        if (dst_handle) releasebuffer_handle(dst_handle);
-        if (src_buf) free(src_buf);
-        if (dst_buf) free(dst_buf);
+//     int ret = imresize(src_img, dst_img, (float)dst_width / src_width, (float)dst_height / src_height);
+//     if (ret != IM_STATUS_SUCCESS) {
+//         std::cerr << "RGA resize error: " << imStrError((IM_STATUS)ret) << "\n";
+//         if (src_handle) releasebuffer_handle(src_handle);
+//         if (dst_handle) releasebuffer_handle(dst_handle);
+//         if (src_buf) free(src_buf);
+//         if (dst_buf) free(dst_buf);
+//         return -1;
+//     }
+//     memcpy(resized_image.data, dst_buf, dst_buf_size);
+//     if (src_handle) releasebuffer_handle(src_handle);
+//     if (dst_handle) releasebuffer_handle(dst_handle);
+//     if (src_buf) free(src_buf);
+//     if (dst_buf) free(dst_buf);
+//     return 0;
+// }
+static int resize_rga(const cv::Mat &image, cv::Mat &resized_image) {
+    rga_buffer_t src;
+    rga_buffer_t dst;
+    im_rect src_rect;
+    im_rect dst_rect;
+    memset(&src, 0, sizeof(src));
+    memset(&dst, 0, sizeof(dst));
+    memset(&src_rect, 0, sizeof(src_rect));
+    memset(&dst_rect, 0, sizeof(dst_rect));
+
+    if (image.type() != CV_8UC3) {
+        printf("source image type is %d!\n", image.type());
         return -1;
     }
-    memcpy(resized_image.data, dst_buf, dst_buf_size);
-    if (src_handle) releasebuffer_handle(src_handle);
-    if (dst_handle) releasebuffer_handle(dst_handle);
-    if (src_buf) free(src_buf);
-    if (dst_buf) free(dst_buf);
+
+    src = wrapbuffer_virtualaddr((void *)image.data, image.cols, image.rows, RK_FORMAT_RGB_888);
+    dst = wrapbuffer_virtualaddr((void *)resized_image.data, resized_image.cols, resized_image.rows, RK_FORMAT_RGB_888);
+
+    int ret = imcheck(src, dst, src_rect, dst_rect);
+    if (IM_STATUS_NOERROR != ret) {
+        fprintf(stderr, "rga check error! %s\n", imStrError((IM_STATUS)ret));
+        releasebuffer_handle(src.handle);
+        releasebuffer_handle(dst.handle);
+        return -1;
+    }
+
+    IM_STATUS STATUS = imresize(src, dst);
+
+    // release buffer
+    releasebuffer_handle(src.handle);
+    releasebuffer_handle(dst.handle);
+
+    if (STATUS != IM_STATUS_SUCCESS) {
+        fprintf(stderr, "imresize error: %s\n", imStrError(STATUS));
+        return -1;
+    }
+
     return 0;
 }
+
+
 
 std::vector<Detection> Detector::convert_output(object_detect_result_list* od_results) {
     // printf("[LOG] Detector::convert_output - Start converting output\n");
