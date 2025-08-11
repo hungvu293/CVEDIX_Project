@@ -233,9 +233,9 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img)
     std::chrono::duration<double, std::milli> resize_duration = end_resize - start;
     std::chrono::duration<double, std::milli> run_duration = end_run - end_resize;
     std::chrono::duration<double, std::milli> post_duration = end_post - end_run;
-    std::cout << "resize: " << resize_duration.count() << " ms" << std::endl;
-    std::cout << "run: " << run_duration.count() << " ms" << std::endl;
-    std::cout << "post: " << post_duration.count() << " ms" << std::endl;
+    // std::cout << "resize: " << resize_duration.count() << " ms" << std::endl;
+    // std::cout << "run: " << run_duration.count() << " ms" << std::endl;
+    // std::cout << "post: " << post_duration.count() << " ms" << std::endl;
     // printf("[LOG] Detector::infer - Inference finished, detections count: %zu\n", detections.size());
     return detections;
 }
@@ -243,6 +243,9 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img)
 int Detector::postprocess(rknn_output* outputs, float scale_w, float scale_h, float conf_threshold, float nms_threshold)
 {
     // printf("[LOG] Detector::postprocess - Start postprocessing\n");
+    if (od_results != nullptr) {
+        memset(od_results, 0, sizeof(object_detect_result_list));
+    }
     rknn_output *_outputs = (rknn_output *)outputs;
 
     std::vector<float> filterBoxes;
