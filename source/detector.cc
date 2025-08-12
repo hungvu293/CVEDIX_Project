@@ -6,6 +6,8 @@
 
 #include <chrono>
 
+std::mutex Detector::resize_mutex;
+
 Detector::Detector(const std::string &model_path) : model_path(model_path) {
     this->model_path = model_path;
     od_results = new object_detect_result_list();
@@ -172,6 +174,7 @@ rknn_context *Detector::get_pctx()
 
 std::vector<Detection> Detector::infer(cv::Mat &ori_img)
 {
+    
     // printf("[LOG] Detector::infer - Start inference\n");
     img_width = ori_img.cols;
     img_height = ori_img.rows;
@@ -184,11 +187,11 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img)
     // detector_mutex.lock();
     if (img_width != width || img_height != height) {
         // printf("[LOG] Detector::infer - Resizing input image\n");
-        // ret = resize_rga(ori_img, resized_img);
-        // if (ret != 0) {
-        //     std::cerr << "resize rga error" << std::endl;
-        // }
-        cv::resize(ori_img, resized_img, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
+        ret = resize_rga(ori_img, resized_img);
+        if (ret != 0) {
+            std::cerr << "resize rga error" << std::endl;
+        }
+        // cv::resize(ori_img, resized_img, cv::Size(width, height), 0, 0, cv::INTER_LINEAR);
     }
     else {
         resized_img = ori_img;
@@ -233,9 +236,9 @@ std::vector<Detection> Detector::infer(cv::Mat &ori_img)
     std::chrono::duration<double, std::milli> resize_duration = end_resize - start;
     std::chrono::duration<double, std::milli> run_duration = end_run - end_resize;
     std::chrono::duration<double, std::milli> post_duration = end_post - end_run;
-    // std::cout << "resize: " << resize_duration.count() << " ms" << std::endl;
-    // std::cout << "run: " << run_duration.count() << " ms" << std::endl;
-    // std::cout << "post: " << post_duration.count() << " ms" << std::endl;
+    std::cout << "resize: " << resize_duration.count() << " ms" << std::endl;
+    std::cout << "run: " << run_duration.count() << " ms" << std::endl;
+    std::cout << "post: " << post_duration.count() << " ms" << std::endl;
     // printf("[LOG] Detector::infer - Inference finished, detections count: %zu\n", detections.size());
     return detections;
 }
@@ -584,6 +587,7 @@ static int quick_sort_indice_inverse(std::vector<float> &input, int left, int ri
 //     return 0;
 // }
 static int resize_rga(const cv::Mat &image, cv::Mat &resized_image) {
+    std::lock_guard<std::mutex> lock(Detector::resize_mutex);
     rga_buffer_t src;
     rga_buffer_t dst;
     im_rect src_rect;
@@ -614,7 +618,7 @@ static int resize_rga(const cv::Mat &image, cv::Mat &resized_image) {
     // release buffer
     releasebuffer_handle(src.handle);
     releasebuffer_handle(dst.handle);
-
+    
     if (STATUS != IM_STATUS_SUCCESS) {
         fprintf(stderr, "imresize error: %s\n", imStrError(STATUS));
         return -1;
