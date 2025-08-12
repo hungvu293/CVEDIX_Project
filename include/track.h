@@ -12,7 +12,7 @@
 
 class Tracking {
 public:
-    Tracking(float det_thresh_ = 0.3f, int max_age_ = 15, int min_hits_ = 1, float iou_threshold_ = 0.3f,
+    Tracking(float det_thresh_ = 0.3f, int max_age_ = 15, int min_hits_ = 1, float iou_threshold_ = 0.1f,
              int delta_t_ = 3, std::string asso_func_ = "iou", float inertia_ = 0.2f, bool use_byte_ = false);
     ~Tracking();
     // std::vector<Detection> convert_output(object_detect_result_list* od_results);

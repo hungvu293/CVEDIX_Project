@@ -25,7 +25,7 @@ int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
     for (int i = 0; i < cam_nb; i++) {
         readers[i] = std::make_unique<Reader>();
         // ret = readers[i]->open(rtsp_urls[i], targetFps);
-        ret = readers[i]->open(rtsp_urls[i]);
+        ret = readers[i]->open(rtsp_urls[i], true);
         if (ret != 0) {
             std::cerr << "Init cam false: " << rtsp_urls[i] << std::endl;
             is_camera_running[i].store(false);
@@ -97,7 +97,7 @@ void Pipeline::decodeLoop(int id) {
     while (is_system_running) {
         if (!is_camera_running[id]) {
             std::cout << "Retry connect" << info.rtsp_urls[id] << std::endl;
-            ret = readers[id]->open(info.rtsp_urls[id]);
+            ret = readers[id]->open(info.rtsp_urls[id], true);
             if (ret != 0) {
                 if (readers[id]->isOpened) {
                     is_camera_running[id].store(true);

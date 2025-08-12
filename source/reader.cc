@@ -1,11 +1,13 @@
 #include "reader.h"
 
 Reader::Reader() : fmt_ctx(nullptr), dec_ctx(nullptr), dec(nullptr), pkt(nullptr), frame(nullptr), sw_frame(nullptr),
-                   sws_ctx(nullptr), hw_device_ctx(nullptr), video_stream_idx(-1), rgb_buf(nullptr), rgb_bufsize(0), isOpened(false) {}
+                   sws_ctx(nullptr), hw_device_ctx(nullptr), video_stream_idx(-1), rgb_buf(nullptr), rgb_bufsize(0), isOpened(false), use_hw_accel(false) {}
 
 Reader::~Reader() {
     close();
 }
+
+std::mutex Reader::decode_mutex;
 
 void Reader::print_error(const char *msg, int err) {
     char errbuf[128];
@@ -16,6 +18,7 @@ void Reader::print_error(const char *msg, int err) {
 int Reader::open(const std::string& input_url, bool use_hw) {
     av_log_set_level(AV_LOG_INFO);
     // av_log_set_level(AV_LOG_DEBUG);
+    use_hw_accel = use_hw;
 
     int ret = 0;
 
@@ -56,6 +59,7 @@ int Reader::open(const std::string& input_url, bool use_hw) {
             fprintf(stdout, "Using hardware decoder: %s\n", prefer_decoder);
         } else {
             fprintf(stderr, "Hardware decoder %s not found, falling back to software decoder.\n", prefer_decoder);
+            use_hw_accel = false;
         }
     }
 
@@ -80,23 +84,6 @@ int Reader::open(const std::string& input_url, bool use_hw) {
         return ret;
     }
 
-    if (use_hw) {
-        AVHWDeviceType hw_type = av_hwdevice_find_type_by_name("rkmpp");
-        if (hw_type != AV_HWDEVICE_TYPE_NONE) {
-            ret = av_hwdevice_ctx_create(&hw_device_ctx, hw_type, NULL, NULL, 0);
-            if (ret >= 0) {
-                dec_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-                fprintf(stdout, "Created rkmpp hw device context.\n");
-            } else {
-                print_error("Warning: cannot create rkmpp hw device", ret);
-                av_buffer_unref(&hw_device_ctx);
-                hw_device_ctx = NULL;
-            }
-        } else {
-            fprintf(stderr, "rkmpp hw device type not found.\n");
-        }
-    }
-
     if ((ret = avcodec_open2(dec_ctx, dec, NULL)) < 0) {
         print_error("Failed to open codec", ret);
         close();
@@ -114,10 +101,74 @@ int Reader::open(const std::string& input_url, bool use_hw) {
     rtsp_url = input_url;
     isOpened = true;
     lastFrameTime = std::chrono::steady_clock::now();
+    fprintf(stdout, "Reader opened stream successfully from: %s\n", rtsp_url.c_str());
     return 0;
 }
 
+int Reader::rga_cvt_color(AVFrame* src_frame, cv::Mat& dst_mat) {
+    int ret = 0;
+    rga_buffer_t src_img, dst_img;
+    rga_buffer_handle_t src_handle, dst_handle;
+
+    memset(&src_img, 0, sizeof(src_img));
+    memset(&dst_img, 0, sizeof(dst_img));
+
+    int src_w = src_frame->width;
+    int src_h = src_frame->height;
+    RgaSURF_FORMAT src_fmt;
+
+    switch (src_frame->format) {
+        case AV_PIX_FMT_NV12:
+            src_fmt = RK_FORMAT_YCbCr_420_SP;
+            break;
+        case AV_PIX_FMT_YUV420P:
+            src_fmt = RK_FORMAT_YCbCr_420_P;
+            break;
+        default:
+            fprintf(stderr, "RGA unsupported source format: %d\n", src_frame->format);
+            return -1;
+    }
+
+    int dst_w = src_w;
+    int dst_h = src_h;
+    RgaSURF_FORMAT dst_fmt = RK_FORMAT_RGB_888;
+
+    dst_mat.create(dst_h, dst_w, CV_8UC3);
+
+    src_handle = importbuffer_virtualaddr(src_frame->data[0], src_frame->linesize[0] * src_frame->height * 3 / 2);
+    dst_handle = importbuffer_virtualaddr(dst_mat.data, dst_mat.total() * dst_mat.elemSize());
+
+    if (src_handle == 0 || dst_handle == 0) {
+        printf("importbuffer failed!\n");
+        if (src_handle) releasebuffer_handle(src_handle);
+        if (dst_handle) releasebuffer_handle(dst_handle);
+        return -1;
+    }
+
+    src_img = wrapbuffer_handle(src_handle, src_w, src_h, src_fmt);
+    dst_img = wrapbuffer_handle(dst_handle, dst_w, dst_h, dst_fmt);
+
+    ret = imcheck(src_img, dst_img, {}, {});
+    if (IM_STATUS_NOERROR != ret) {
+        printf("%d, check error! %s", __LINE__, imStrError((IM_STATUS)ret));
+        releasebuffer_handle(src_handle);
+        releasebuffer_handle(dst_handle);
+        return -1;
+    }
+
+    ret = imcvtcolor(src_img, dst_img, src_fmt, dst_fmt);
+    if (ret != IM_STATUS_SUCCESS) {
+        printf("imcvtcolor failed: %s\n", imStrError((IM_STATUS)ret));
+    }
+
+    releasebuffer_handle(src_handle);
+    releasebuffer_handle(dst_handle);
+
+    return (ret == IM_STATUS_SUCCESS) ? 0 : -1;
+}
+
 int Reader::decodeFrame(cv::Mat& outFrame) {
+    std::lock_guard<std::mutex> lock(Reader::decode_mutex);
     int ret = 0;
 
     if ((ret = av_read_frame(fmt_ctx, pkt)) < 0) {
@@ -148,51 +199,58 @@ int Reader::decodeFrame(cv::Mat& outFrame) {
                 convert_src = frame;
             }
 
-            int src_w = convert_src->width;
-            int src_h = convert_src->height;
-            enum AVPixelFormat src_fmt = (enum AVPixelFormat)convert_src->format;
-            enum AVPixelFormat dst_fmt = AV_PIX_FMT_RGB24;
-
             // Frame skipping logic
-            auto now = std::chrono::steady_clock::now();
-            auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFrameTime).count();
-            if (elapsedMs < targetIntervalMs) {
-                av_frame_unref(frame);
-                av_packet_unref(pkt);
-                // std::cout << "drop frame" << std::endl;
-                continue;
-            }
-            lastFrameTime = now;
+            // auto now = std::chrono::steady_clock::now();
+            // auto elapsedMs = std::chrono::duration_cast<std::chrono::milliseconds>(now - lastFrameTime).count();
+            // if (elapsedMs < targetIntervalMs) {
+            //     av_frame_unref(frame);
+            //     // av_packet_unref(pkt); // pkt is unreffed at the end of the outer loop
+            //     // std::cout << "drop frame" << std::endl;
+            //     continue;
+            // }
+            // lastFrameTime = now;
 
-            if (!sws_ctx) {
-                sws_ctx = sws_getContext(src_w, src_h, src_fmt,
-                                         src_w, src_h, dst_fmt,
-                                         SWS_BILINEAR, NULL, NULL, NULL);
-                if (!sws_ctx) {
-                    close();
-                    return AVERROR(EINVAL);
+            // if (use_hw_accel) { // use_hw was true
+            if (false) {
+                if (rga_cvt_color(convert_src, outFrame) != 0) {
+                    fprintf(stderr, "RGA color conversion failed.\n");
                 }
+            } else {
+                int src_w = convert_src->width;
+                int src_h = convert_src->height;
+                enum AVPixelFormat src_fmt = (enum AVPixelFormat)convert_src->format;
+                enum AVPixelFormat dst_fmt = AV_PIX_FMT_RGB24;
+
+                if (!sws_ctx) {
+                    sws_ctx = sws_getContext(src_w, src_h, src_fmt,
+                                             src_w, src_h, dst_fmt,
+                                             SWS_BILINEAR, NULL, NULL, NULL);
+                    if (!sws_ctx) {
+                        close();
+                        return AVERROR(EINVAL);
+                    }
+                }
+
+                int needed = av_image_get_buffer_size(dst_fmt, src_w, src_h, 1);
+                if (needed != rgb_bufsize) {
+                    av_freep(&rgb_buf);
+                    rgb_buf = (uint8_t*)av_malloc(needed);
+                    rgb_bufsize = needed;
+                }
+
+                uint8_t *dst_data[4] = {0};
+                int dst_linesizes[4] = {0};
+                av_image_fill_arrays(dst_data, dst_linesizes, rgb_buf, dst_fmt, src_w, src_h, 1);
+
+                sws_scale(sws_ctx,
+                          (const uint8_t * const*)convert_src->data,
+                          convert_src->linesize,
+                          0, src_h,
+                          dst_data, dst_linesizes);
+
+                // Convert to cv::Mat
+                outFrame = cv::Mat(src_h, src_w, CV_8UC3, dst_data[0], dst_linesizes[0]).clone();
             }
-
-            int needed = av_image_get_buffer_size(dst_fmt, src_w, src_h, 1);
-            if (needed != rgb_bufsize) {
-                av_freep(&rgb_buf);
-                rgb_buf = (uint8_t*)av_malloc(needed);
-                rgb_bufsize = needed;
-            }
-
-            uint8_t *dst_data[4] = {0};
-            int dst_linesizes[4] = {0};
-            av_image_fill_arrays(dst_data, dst_linesizes, rgb_buf, dst_fmt, src_w, src_h, 1);
-
-            sws_scale(sws_ctx,
-                      (const uint8_t * const*)convert_src->data,
-                      convert_src->linesize,
-                      0, src_h,
-                      dst_data, dst_linesizes);
-
-            // Convert to cv::Mat
-            outFrame = cv::Mat(src_h, src_w, CV_8UC3, dst_data[0], dst_linesizes[0]).clone();
 
             // std::cout << "Decoded frame from: " << rtsp_url << std::endl;
 

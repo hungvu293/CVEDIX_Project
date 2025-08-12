@@ -25,15 +25,21 @@ Tracking::~Tracking() {
 }
 
 void Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
+    // if (output.empty()) {
+    //     if (oc_sort_tracker.trackers.size() != 0) {
+    //         for (int i = 0; i < oc_sort_tracker.trackers.size(); i++) {
+    //             auto pos = oc_sort_tracker.trackers.at(i).predict();
+    //             oc_sort_tracker.trackers.at(i).update(nullptr, 0);
+    //             std::cout << "update at " << pos.transpose() << std::endl;
+    //         }
+    //     }
+    //     return;
+    // }
     if (output.empty()) {
-        if (size(oc_sort_tracker.trackers) != 0) {
-            for (int i = 0; i < size(oc_sort_tracker.trackers); i++) {
-                oc_sort_tracker.trackers[i].predict();
-                oc_sort_tracker.trackers[i].update(nullptr, 0);
-            }
-        }
+        Eigen::Matrix<float, Eigen::Dynamic, 6> dets;
+        std::vector<Eigen::RowVectorXf> res = oc_sort_tracker.update(dets);
+        return;
     }
-    return;
     
     std::vector<std::vector<float>> data;
     cv::Rect box;
@@ -52,19 +58,18 @@ void Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
         data.push_back(row);
     }
     std::vector<Eigen::RowVectorXf> res = oc_sort_tracker.update(Vector2Matrix(data));
-    data.clear();
 
     return;
 }
 
 void Tracking::draw_tracks(cv::Mat& frame) {
     std::cout << "track size" << oc_sort_tracker.trackers.size() << std::endl;
-    for (auto trk : oc_sort_tracker.trackers) {
+    for (int i = 0; i < oc_sort_tracker.trackers.size(); i++) {
         Eigen::Matrix<float, 1, 4> d;
-        d = trk.get_state();
+        d = oc_sort_tracker.trackers.at(i).get_state();
         cv::Rect box(d(0), d(1), d(2) - d(0) + 1, d(3) - d(1) + 1);
-
-        // cv::putText(frame, cv::format("ID:%d", trk.id), cv::Point(d(0), d(1) - 5), 0, 0.5, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
-        cv::rectangle(frame, box, cv::Scalar(trk.color[0], trk.color[1], trk.color[2]), 2);
+        cv::Scalar color(oc_sort_tracker.trackers.at(i).color[0], oc_sort_tracker.trackers.at(i).color[1], oc_sort_tracker.trackers.at(i).color[2]);
+        cv::putText(frame, cv::format("ID:%d, age: %d", oc_sort_tracker.trackers.at(i).id, oc_sort_tracker.trackers.at(i).age), cv::Point(d(0), d(1) - 5), 0, 0.5, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
+        cv::rectangle(frame, box, color, 2);
     }
 }
