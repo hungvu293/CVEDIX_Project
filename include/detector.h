@@ -3,9 +3,11 @@
 
 #include <cstddef>
 #include "rknn_api.h"
-#include "im2d.h"
-#include "rga.h"
-#include "RgaUtils.h"
+// #include "im2d.h"
+// #include "rga.h"
+// #include "RgaUtils.h"
+
+#include "rga_helper.hpp"
 #include "opencv2/opencv.hpp"
 
 // #include <thread>
@@ -108,8 +110,8 @@ private:
 
     float nms_threshold {0.5};
     float box_conf_threshold {0.2};
-    std::vector<std::string> classes{"person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"};
-    // std::vector<std::string> classes{"plate"};
+    // std::vector<std::string> classes{"person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"};
+    std::vector<std::string> classes{"plate"};
 
     int postprocess(rknn_output* outputs, float scale_w, float scale_h,
                     float conf_threshold, float nms_threshold);
@@ -117,7 +119,7 @@ private:
     std::vector<Detection> convert_output(object_detect_result_list* od_results);
 };
 
-static int resize_rga(const cv::Mat &src, cv::Mat &dst);
+// static int resize_rga(const cv::Mat &src, cv::Mat &dst);
 static void dump_tensor_attr(rknn_tensor_attr *attr);
 static unsigned char *load_data(FILE *fp, size_t ofst, size_t sz);
 static unsigned char *load_model(const char *filename, int *model_size);

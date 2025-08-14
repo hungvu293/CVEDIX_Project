@@ -63,7 +63,6 @@ void Tracking::run(cv::Mat& frame, std::vector<Detection>& output) {
 }
 
 void Tracking::draw_tracks(cv::Mat& frame) {
-    std::cout << "track size" << oc_sort_tracker.trackers.size() << std::endl;
     for (int i = 0; i < oc_sort_tracker.trackers.size(); i++) {
         Eigen::Matrix<float, 1, 4> d;
         d = oc_sort_tracker.trackers.at(i).get_state();
@@ -72,4 +71,18 @@ void Tracking::draw_tracks(cv::Mat& frame) {
         cv::putText(frame, cv::format("ID:%d, age: %d", oc_sort_tracker.trackers.at(i).id, oc_sort_tracker.trackers.at(i).age), cv::Point(d(0), d(1) - 5), 0, 0.5, cv::Scalar(255, 255, 255), 1, cv::LINE_AA);
         cv::rectangle(frame, box, color, 2);
     }
+}
+
+std::vector<cv::Rect> Tracking::getPlates() {
+    std::vector<cv::Rect> res;
+    for (int i = 0; i < oc_sort_tracker.trackers.size(); i++) {
+        if (!oc_sort_tracker.trackers.at(i).isSent) {
+            Eigen::Matrix<float, 1, 4> d;
+            d = oc_sort_tracker.trackers.at(i).get_state();
+            cv::Rect box(d(0), d(1), d(2) - d(0) + 1, d(3) - d(1) + 1);
+            res.push_back(box);
+            oc_sort_tracker.trackers.at(i).isSent = true;
+        }
+    }
+    return res;
 }

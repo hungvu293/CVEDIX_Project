@@ -19,10 +19,10 @@ private:
     mutable std::mutex mut;
     std::queue<std::shared_ptr<T>> data_queue;
     std::condition_variable data_cond;
-    size_t max_size {10};
+    size_t max_size;
 
 public:
-    lock_based_queue() = default;
+    explicit lock_based_queue(size_t max_queue_size = 10) : max_size(max_queue_size) {}
 
     lock_based_queue(const lock_based_queue& other) = delete;
     lock_based_queue& operator=(const lock_based_queue& other) = delete;

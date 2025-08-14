@@ -1,38 +1,18 @@
 #ifndef OSD_H
 #define OSD_H
 #include <opencv2/opencv.hpp>
-#include <crow.h>
-#include <mutex>
-#include <thread>
-#include <vector>
-#include <array>
 
 class OSD {
 public:
     OSD();
+    ~OSD();
+    cv::Mat combineFrames(const cv::Mat& frame1, const cv::Mat& frame2);
     void init_display();
     void show(cv::Mat& frame);
+    void show2(cv::Mat& frame1, cv::Mat& frame2);
     void release();
-    ~OSD();
-    
-    // Web streaming functionality
-    void startWebServer(int port = 8080);
-    void stopWebServer();
-    void updateFrames(const std::array<cv::Mat, 2>& frames, const std::array<bool, 2>& camera_status);
-
-private:
-    // Web server components
-    std::unique_ptr<crow::SimpleApp> app;
-    std::unique_ptr<std::thread> server_thread;
-    bool server_running = false;
-    
-    // Frame data for streaming
-    std::mutex frame_mutex;
-    std::vector<uchar> combined_jpeg_buffer;
-    bool frame_ready = false;
-    
-    // Helper methods
-    cv::Mat combineFrames(const std::array<cv::Mat, 2>& frames, const std::array<bool, 2>& camera_status);
+    std::chrono::steady_clock::time_point last_update_time;
+    double fps = 0.0;
 };
 
 #endif // OSD_H

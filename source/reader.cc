@@ -26,6 +26,10 @@ int Reader::open(const std::string& input_url, bool use_hw) {
     av_dict_set(&opts, "rtsp_transport", "tcp", 0);
     av_dict_set(&opts, "max_delay", "100000", 0); // 100ms max delay
     av_dict_set(&opts, "fflags", "nobuffer", 0);   // Do not buffer packets
+    av_dict_set(&opts, "flags", "low_delay", 0);
+    // av_dict_set(&opts, "probesize", "32", 0);
+    // av_dict_set(&opts, "analyzeduration", "1", 0);
+    av_dict_set(&opts, "sync", "ext", 0);
     if ((ret = avformat_open_input(&fmt_ctx, input_url.c_str(), NULL, &opts)) < 0) {
         print_error("Cannot open input", ret);
         av_dict_free(&opts);
@@ -39,6 +43,10 @@ int Reader::open(const std::string& input_url, bool use_hw) {
         close();
         return ret;
     }
+
+    // fmt_ctx->flags |= AVFMT_FLAG_NONBLOCK;
+    fmt_ctx->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_FLUSH_PACKETS;
+
 
     for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
         if (fmt_ctx->streams[i]->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
@@ -78,17 +86,22 @@ int Reader::open(const std::string& input_url, bool use_hw) {
         close();
         return AVERROR(ENOMEM);
     }
+    dec_ctx->thread_count = 1; // Set to 1 to avoid threading issues with RGA
+
     if ((ret = avcodec_parameters_to_context(dec_ctx, fmt_ctx->streams[video_stream_idx]->codecpar)) < 0) {
         print_error("Failed to copy codec parameters", ret);
         close();
         return ret;
     }
 
-    if ((ret = avcodec_open2(dec_ctx, dec, NULL)) < 0) {
+    AVDictionary *codec_opts = NULL;
+    av_dict_set(&codec_opts, "strict", "experimental", 0);
+    if ((ret = avcodec_open2(dec_ctx, dec, &codec_opts)) < 0) {
         print_error("Failed to open codec", ret);
         close();
         return ret;
     }
+    av_dict_free(&codec_opts);
 
     pkt = av_packet_alloc();
     frame = av_frame_alloc();
@@ -105,70 +118,9 @@ int Reader::open(const std::string& input_url, bool use_hw) {
     return 0;
 }
 
-int Reader::rga_cvt_color(AVFrame* src_frame, cv::Mat& dst_mat) {
-    int ret = 0;
-    rga_buffer_t src_img, dst_img;
-    rga_buffer_handle_t src_handle, dst_handle;
 
-    memset(&src_img, 0, sizeof(src_img));
-    memset(&dst_img, 0, sizeof(dst_img));
-
-    int src_w = src_frame->width;
-    int src_h = src_frame->height;
-    RgaSURF_FORMAT src_fmt;
-
-    switch (src_frame->format) {
-        case AV_PIX_FMT_NV12:
-            src_fmt = RK_FORMAT_YCbCr_420_SP;
-            break;
-        case AV_PIX_FMT_YUV420P:
-            src_fmt = RK_FORMAT_YCbCr_420_P;
-            break;
-        default:
-            fprintf(stderr, "RGA unsupported source format: %d\n", src_frame->format);
-            return -1;
-    }
-
-    int dst_w = src_w;
-    int dst_h = src_h;
-    RgaSURF_FORMAT dst_fmt = RK_FORMAT_RGB_888;
-
-    dst_mat.create(dst_h, dst_w, CV_8UC3);
-
-    src_handle = importbuffer_virtualaddr(src_frame->data[0], src_frame->linesize[0] * src_frame->height * 3 / 2);
-    dst_handle = importbuffer_virtualaddr(dst_mat.data, dst_mat.total() * dst_mat.elemSize());
-
-    if (src_handle == 0 || dst_handle == 0) {
-        printf("importbuffer failed!\n");
-        if (src_handle) releasebuffer_handle(src_handle);
-        if (dst_handle) releasebuffer_handle(dst_handle);
-        return -1;
-    }
-
-    src_img = wrapbuffer_handle(src_handle, src_w, src_h, src_fmt);
-    dst_img = wrapbuffer_handle(dst_handle, dst_w, dst_h, dst_fmt);
-
-    ret = imcheck(src_img, dst_img, {}, {});
-    if (IM_STATUS_NOERROR != ret) {
-        printf("%d, check error! %s", __LINE__, imStrError((IM_STATUS)ret));
-        releasebuffer_handle(src_handle);
-        releasebuffer_handle(dst_handle);
-        return -1;
-    }
-
-    ret = imcvtcolor(src_img, dst_img, src_fmt, dst_fmt);
-    if (ret != IM_STATUS_SUCCESS) {
-        printf("imcvtcolor failed: %s\n", imStrError((IM_STATUS)ret));
-    }
-
-    releasebuffer_handle(src_handle);
-    releasebuffer_handle(dst_handle);
-
-    return (ret == IM_STATUS_SUCCESS) ? 0 : -1;
-}
 
 int Reader::decodeFrame(cv::Mat& outFrame) {
-    std::lock_guard<std::mutex> lock(Reader::decode_mutex);
     int ret = 0;
 
     if ((ret = av_read_frame(fmt_ctx, pkt)) < 0) {
@@ -188,7 +140,9 @@ int Reader::decodeFrame(cv::Mat& outFrame) {
         while ((ret = avcodec_receive_frame(dec_ctx, frame)) >= 0) {
             AVFrame *convert_src = nullptr;
             if (frame->hw_frames_ctx || av_pix_fmt_desc_get((AVPixelFormat)frame->format)->flags & AV_PIX_FMT_FLAG_HWACCEL) {
+                // rgaMutex.lock();
                 ret = av_hwframe_transfer_data(sw_frame, frame, 0);
+                // rgaMutex.unlock();
                 if (ret < 0) {
                     print_error("Failed to transfer hw frame", ret);
                     av_frame_unref(frame);
@@ -248,11 +202,8 @@ int Reader::decodeFrame(cv::Mat& outFrame) {
                           0, src_h,
                           dst_data, dst_linesizes);
 
-                // Convert to cv::Mat
                 outFrame = cv::Mat(src_h, src_w, CV_8UC3, dst_data[0], dst_linesizes[0]).clone();
             }
-
-            // std::cout << "Decoded frame from: " << rtsp_url << std::endl;
 
             av_frame_unref(frame);
             av_frame_unref(sw_frame);

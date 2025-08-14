@@ -8,8 +8,9 @@
 #include <mutex>
 #include <opencv2/opencv.hpp>
 
-#include "RgaUtils.h"
-#include "im2d.hpp"
+// #include "RgaUtils.h"
+// #include "im2d.hpp"
+#include "rga_helper.hpp"
 
 extern "C" {
 #include <libavformat/avformat.h>
@@ -33,7 +34,7 @@ public:
 
 private:
     void print_error(const char *msg, int err);
-    int rga_cvt_color(AVFrame* src_frame, cv::Mat& dst_mat);
+    // int rga_cvt_color(AVFrame* src_frame, cv::Mat& dst_mat);
 
     AVFormatContext *fmt_ctx;
     AVCodecContext *dec_ctx;

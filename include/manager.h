@@ -32,27 +32,37 @@ private:
     int threadNum;
 
     // Object holders
-    std::array<std::unique_ptr<Reader>, 2> readers;
+    // std::array<std::unique_ptr<Reader>, 2> readers;
+    std::array<std::unique_ptr<Reader>, 1> readers;
     std::unique_ptr<rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>> pool;
-    std::array<std::unique_ptr<Tracking>, 2> trackers;
+    std::array<std::unique_ptr<Tracking>, 1> trackers;
+    // std::array<std::unique_ptr<Tracking>, 2> trackers;
+
     std::unique_ptr<OSD> display;
     // std::unique_ptr<MQTT> message;
 
     //Data holders
-    std::array<lock_based_queue<InferenceToTrack>, 2> inference_to_track_queues;
-    std::array<lock_based_queue<TrackToOSD>, 2> track_to_osd_queues;
+    // std::array<lock_based_queue<InferenceToTrack>, 2> inference_to_track_queues;
+    std::array<lock_based_queue<InferenceToTrack>, 1> inference_to_track_queues;
+    // std::array<lock_based_queue<TrackToOSD>, 2> track_to_osd_queues;
+    std::array<lock_based_queue<TrackToOSD>, 1> track_to_osd_queues;
+
     //MQTT message
 
     //Thread holders
-    std::array<std::thread, 2> decode_threads;
+    // std::array<std::thread, 2> decode_threads;
+    std::array<std::thread, 1> decode_threads;
     std::thread detector_thread;
-    std::array<std::thread, 2> tracking_threads;
+    // std::array<std::thread, 2> tracking_threads;
+    std::array<std::thread, 1> tracking_threads;
     std::thread display_thread;
     // std::thread message_thread
 
     //Flag
     std::atomic<bool> is_system_running;
-    std::array<std::atomic<bool>, 2> is_camera_running;
+    // std::array<std::atomic<bool>, 2> is_camera_running;
+    std::array<std::atomic<bool>, 1> is_camera_running;
+
 
     SystemStat stat;
     ReaderInfo info;

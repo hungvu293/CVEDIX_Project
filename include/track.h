@@ -18,6 +18,7 @@ public:
     // std::vector<Detection> convert_output(object_detect_result_list* od_results);
     void run(cv::Mat& frame, std::vector<Detection>& output);
     void draw_tracks(cv::Mat& frame);
+    std::vector<cv::Rect> getPlates();
 private:
     ocsort::OCSort oc_sort_tracker;
 };
