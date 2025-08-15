@@ -43,7 +43,7 @@ void consumer(rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>& pool
             for (auto det : result.detections) { // Use a copy to modify it
                 if (det.class_id == 0) {
                     // Increase width and height by 30%
-                    float scale = 1.3f;
+                    float scale = 1.7f;
                     int new_width = static_cast<int>(det.box.width * scale);
                     int new_height = static_cast<int>(det.box.height * scale);
 
@@ -117,7 +117,26 @@ void handle_input(std::atomic<bool>& done) {
 }
 
 int main() {
-    std::string model_path = "../model/yolo11n_plate_int8_3566_optimize.rknn";
+    // Tạo 2 Reader objects
+    Reader reader0, reader1;
+    
+    std::string input0 = "rtsp://user03:abcd1234@113.177.128.13:8159";
+    std::string input1 = "rtsp://user03:abcd1234@113.177.126.32:8153";
+    
+    // Mở cả 2 streams
+    if (reader0.open(input0) != 0) {
+        std::cerr << "Failed to open input0: " << input0 << std::endl;
+        return -1;
+    }
+    
+    // if (reader1.open(input1, true) != 0) {
+    //     std::cerr << "Failed to open input1: " << input1 << std::endl;
+    //     reader0.close();
+    //     return -1;
+    // }
+
+    // std::string model_path = "../model/yolo11n_plate_int8_3566_optimize.rknn";
+    std::string model_path = "../model/yolo11n_quantization_no_postprocessing.rknn";
     // std::string model_path = "../model/yolov8.rknn";
     int threadNum = 6;
     rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata> pool(model_path, threadNum);
@@ -126,24 +145,6 @@ int main() {
         return -1;
     }
     std::cout << "rknnPool initialized successfully with " << threadNum << " threads." << std::endl;
-
-    // Tạo 2 Reader objects
-    Reader reader0, reader1;
-    
-    std::string input0 = "rtsp://user03:abcd1234@113.177.128.13:8159";
-    std::string input1 = "rtsp://user03:abcd1234@113.177.126.32:8153";
-    
-    // Mở cả 2 streams
-    if (reader0.open(input0, true) != 0) {
-        std::cerr << "Failed to open input0: " << input0 << std::endl;
-        return -1;
-    }
-    
-    if (reader1.open(input1, true) != 0) {
-        std::cerr << "Failed to open input1: " << input1 << std::endl;
-        reader0.close();
-        return -1;
-    }
 
     Tracking tracker0, tracker1;
     Stream stream; // MJPEG Stream
@@ -167,12 +168,12 @@ int main() {
 
     // Khởi chạy 2 luồng producer và 1 luồng consumer
     std::thread producer_thread0(producer, std::ref(reader0), std::ref(pool), std::ref(done), 0);
-    std::thread producer_thread1(producer, std::ref(reader1), std::ref(pool), std::ref(done), 1);
+    // std::thread producer_thread1(producer, std::ref(reader1), std::ref(pool), std::ref(done), 1);
     std::thread consumer_thread(consumer, std::ref(pool), std::ref(tracker0), std::ref(tracker1), std::ref(stream), std::ref(osd), std::ref(server), std::ref(message_client), std::ref(done));
 
     // Chờ các luồng hoàn thành
-    producer_thread0.join();
-    producer_thread1.join();
+    // producer_thread0.join();
+    // producer_thread1.join();
     consumer_thread.join();
 
     // Đảm bảo luồng input cũng kết thúc
