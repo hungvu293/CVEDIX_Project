@@ -40,11 +40,23 @@ void consumer(rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>& pool
         if (pool.get(result) == 0) {
             // Lọc để chỉ giữ lại các phát hiện có class_id là 0
             std::vector<Detection> filtered_detections;
-            for (const auto& det : result.detections) {
+            for (auto det : result.detections) { // Use a copy to modify it
                 if (det.class_id == 0) {
+                    // Increase width and height by 30%
+                    float scale = 1.3f;
+                    int new_width = static_cast<int>(det.box.width * scale);
+                    int new_height = static_cast<int>(det.box.height * scale);
+
+                    // Adjust x and y to keep the box centered
+                    det.box.x -= (new_width - det.box.width) / 2;
+                    det.box.y -= (new_height - det.box.height) / 2;
+                    det.box.width = new_width;
+                    det.box.height = new_height;
+                    
                     filtered_detections.push_back(det);
                 }
             }
+
             for (const auto& det : filtered_detections) {
                 cv::rectangle(result.original_frame, det.box, det.color, 2);
                 std::string label = det.className + ": " + std::to_string(det.confidence);
@@ -53,32 +65,32 @@ void consumer(rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>& pool
 
             if (result.camera_id == 0) {
                 tracker0.run(result.original_frame, filtered_detections);
-                std::vector<cv::Rect> plates0 = tracker0.getPlates();
-                for (const auto& plate : plates0) {
-                    // Ensure the plate rectangle is within the frame boundaries before cropping
-                    cv::Rect img_rect(0, 0, result.original_frame.cols, result.original_frame.rows);
-                    cv::Rect valid_plate = plate & img_rect;
-                    if (valid_plate.width > 0 && valid_plate.height > 0) {
-                        cv::Mat plate_img = result.original_frame(valid_plate);
-                        message_client.sendMessage(result.capture_time, result.camera_id, plate_img);
-                    }
-                }
+                // std::vector<cv::Rect> plates0 = tracker0.getPlates();
+                // for (const auto& plate : plates0) {
+                //     // Ensure the plate rectangle is within the frame boundaries before cropping
+                //     cv::Rect img_rect(0, 0, result.original_frame.cols, result.original_frame.rows);
+                //     cv::Rect valid_plate = plate & img_rect;
+                //     if (valid_plate.width > 0 && valid_plate.height > 0) {
+                //         cv::Mat plate_img = result.original_frame(valid_plate);
+                //         message_client.sendMessage(result.capture_time, result.camera_id, plate_img);
+                //     }
+                // }
                 tracker0.draw_tracks(result.original_frame);
                 stream.updateFrame(result.original_frame, 0);
                 // server.encodeFrame(result.original_frame);
             }
             else if (result.camera_id == 1) {
                 tracker1.run(result.original_frame, filtered_detections);
-                std::vector<cv::Rect> plates1 = tracker1.getPlates();
-                for (const auto& plate : plates1) {
-                    // Ensure the plate rectangle is within the frame boundaries before cropping
-                    cv::Rect img_rect(0, 0, result.original_frame.cols, result.original_frame.rows);
-                    cv::Rect valid_plate = plate & img_rect;
-                    if (valid_plate.width > 0 && valid_plate.height > 0) {
-                        cv::Mat plate_img = result.original_frame(valid_plate);
-                        message_client.sendMessage(result.capture_time, result.camera_id, plate_img);
-                    }
-                }
+                // std::vector<cv::Rect> plates1 = tracker1.getPlates();
+                // for (const auto& plate : plates1) {
+                //     // Ensure the plate rectangle is within the frame boundaries before cropping
+                //     cv::Rect img_rect(0, 0, result.original_frame.cols, result.original_frame.rows);
+                //     cv::Rect valid_plate = plate & img_rect;
+                //     if (valid_plate.width > 0 && valid_plate.height > 0) {
+                //         cv::Mat plate_img = result.original_frame(valid_plate);
+                //         message_client.sendMessage(result.capture_time, result.camera_id, plate_img);
+                //     }
+                // }
                 tracker1.draw_tracks(result.original_frame);
                 stream.updateFrame(result.original_frame, 1);
             }

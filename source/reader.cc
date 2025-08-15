@@ -27,9 +27,12 @@ int Reader::open(const std::string& input_url, bool use_hw) {
     av_dict_set(&opts, "max_delay", "100000", 0); // 100ms max delay
     av_dict_set(&opts, "fflags", "nobuffer", 0);   // Do not buffer packets
     av_dict_set(&opts, "flags", "low_delay", 0);
-    // av_dict_set(&opts, "probesize", "32", 0);
-    // av_dict_set(&opts, "analyzeduration", "1", 0);
+    av_dict_set(&opts, "probesize", "32", 0);
+    av_dict_set(&opts, "analyzeduration", "1", 0);
+    av_dict_set(&opts, "flush_packets", "1", 0);
+    av_dict_set(&opts, "avioflags", "direct", 0);
     av_dict_set(&opts, "sync", "ext", 0);
+
     if ((ret = avformat_open_input(&fmt_ctx, input_url.c_str(), NULL, &opts)) < 0) {
         print_error("Cannot open input", ret);
         av_dict_free(&opts);
@@ -38,14 +41,16 @@ int Reader::open(const std::string& input_url, bool use_hw) {
     }
     av_dict_free(&opts);
 
+    fmt_ctx->avio_flags |= AVIO_FLAG_DIRECT;
+    // fmt_ctx->flags |= AVFMT_FLAG_NONBLOCK;
+    fmt_ctx->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_FLUSH_PACKETS;
+
     if ((ret = avformat_find_stream_info(fmt_ctx, NULL)) < 0) {
         print_error("Cannot find stream info", ret);
         close();
         return ret;
     }
 
-    // fmt_ctx->flags |= AVFMT_FLAG_NONBLOCK;
-    fmt_ctx->flags |= AVFMT_FLAG_NOBUFFER | AVFMT_FLAG_FLUSH_PACKETS;
 
 
     for (unsigned i = 0; i < fmt_ctx->nb_streams; ++i) {
@@ -121,6 +126,7 @@ int Reader::open(const std::string& input_url, bool use_hw) {
 
 
 int Reader::decodeFrame(cv::Mat& outFrame) {
+    // std::lock_guard<std::mutex> lock(rgaMutex);
     int ret = 0;
 
     if ((ret = av_read_frame(fmt_ctx, pkt)) < 0) {
@@ -140,9 +146,9 @@ int Reader::decodeFrame(cv::Mat& outFrame) {
         while ((ret = avcodec_receive_frame(dec_ctx, frame)) >= 0) {
             AVFrame *convert_src = nullptr;
             if (frame->hw_frames_ctx || av_pix_fmt_desc_get((AVPixelFormat)frame->format)->flags & AV_PIX_FMT_FLAG_HWACCEL) {
-                // rgaMutex.lock();
+                rgaMutex.lock();
                 ret = av_hwframe_transfer_data(sw_frame, frame, 0);
-                // rgaMutex.unlock();
+                rgaMutex.unlock();
                 if (ret < 0) {
                     print_error("Failed to transfer hw frame", ret);
                     av_frame_unref(frame);
