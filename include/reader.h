@@ -13,13 +13,13 @@
 #include "rga_helper.hpp"
 
 extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/opt.h>
-#include <libavutil/error.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/hwcontext.h>
-#include <libswscale/swscale.h>
+#include <dev/ffmpeg/libavformat/avformat.h>
+#include <dev/ffmpeg/libavcodec/avcodec.h>
+#include <dev/ffmpeg/libavutil/opt.h>
+#include <dev/ffmpeg/libavutil/error.h>
+#include <dev/ffmpeg/libavutil/imgutils.h>
+#include <dev/ffmpeg/libavutil/hwcontext.h>
+#include <dev/ffmpeg/libswscale/swscale.h>
 }
 
 class Reader {
@@ -34,7 +34,6 @@ public:
 
 private:
     void print_error(const char *msg, int err);
-    // int rga_cvt_color(AVFrame* src_frame, cv::Mat& dst_mat);
 
     AVFormatContext *fmt_ctx;
     AVCodecContext *dec_ctx;
@@ -51,7 +50,7 @@ private:
     bool use_hw_accel;
 
     std::chrono::steady_clock::time_point lastFrameTime;
-    const int targetIntervalMs = 1000;
+    const int targetIntervalMs = 100;
 };
 
 #endif // READER_H

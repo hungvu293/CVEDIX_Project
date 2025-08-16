@@ -15,7 +15,7 @@ class rknnPool
 private:
     int threadNum;
     std::string modelPath;
-    size_t max_queue_size {5};
+    size_t max_queue_size {10};
 
     long long id;
     std::mutex idMtx, queueMtx;
@@ -85,9 +85,6 @@ int rknnPool<rknnModel, inputType, outputType>::put(inputType inputData)
     std::lock_guard<std::mutex> lock(queueMtx);
     if (futs.size() >= max_queue_size)
     {
-        // Queue is full, drop the new task
-        // return -1; // Or some other indicator of failure/full queue
-        // futs.pop();
         return 0;
     }
     futs.push(pool->submit(&rknnModel::infer_meta, models[this->getModelId()], inputData));

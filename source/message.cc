@@ -79,6 +79,8 @@ void Message::disconnect() {
 }
 
 void Message::sendMessage(const std::chrono::system_clock::time_point& capture_time, int camera_id, const cv::Mat& frame) {
+    std::lock_guard<std::mutex> lock(sendMutex);
+    
     if (!client.is_connected()) {
         std::cerr << "MQTT client not connected. Cannot send message." << std::endl;
         return;
@@ -93,18 +95,19 @@ void Message::sendMessage(const std::chrono::system_clock::time_point& capture_t
 
     // 2. Encode JPEG buffer to Base64
     std::string base64_frame = base64_encode(buf);
+    std::string data_uri_frame = "data:image/jpeg;base64," + base64_frame;
 
     // 3. Format timestamp
     auto time_t = std::chrono::system_clock::to_time_t(capture_time);
     auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(capture_time.time_since_epoch()) % 1000;
     std::stringstream ss;
-    ss << std::put_time(std::localtime(&time_t), "%Y-%m-%dT%H:%M:%S") << "." << std::setfill('0') << std::setw(3) << ms.count() << "Z";
+    ss << std::put_time(std::localtime(&time_t), "%Y-%m-%d %H:%M:%S") << "." << std::setfill('0') << std::setw(3) << ms.count();
     std::string timestamp_str = ss.str();
 
     // 4. Create JSON payload
     std::string payload = "{\"camera_id\": " + std::to_string(camera_id) + ", "
                           "\"capture_time\": \"" + timestamp_str + "\", "
-                          "\"frame\": \"" + base64_frame + "\"}";
+                          "\"frame\": \"" + data_uri_frame + "\"}";
 
     // 5. Publish message
     try {

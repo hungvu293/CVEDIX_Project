@@ -8,27 +8,22 @@
 
 
 Pipeline::Pipeline() : 
-    // inference_to_track_queues{lock_based_queue<InferenceToTrack>(10), lock_based_queue<InferenceToTrack>(10)},
-    // track_to_osd_queues{lock_based_queue<TrackToOSD>(10), lock_based_queue<TrackToOSD>(10)}
-    inference_to_track_queues{lock_based_queue<InferenceToTrack>(10)}, track_to_osd_queues{lock_based_queue<TrackToOSD>(10)}
+    inference_to_track_queues{lock_based_queue<InferenceToTrack>(10), lock_based_queue<InferenceToTrack>(10)},
+    track_to_osd_queues{lock_based_queue<TrackToOSD>(10), lock_based_queue<TrackToOSD>(10)}
 {}
 
 int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
     int ret;
+    // for (int i = 0; i < cam_nb; i++) {
+    //     info.rtsp_urls[i] = rtsp_urls[i];
+    //     info.rtsp_titles[i] = "Camera " + std::to_string(i);
+    // }
     int cam_nb = rtsp_urls.size();
-    if (cam_nb > 2) {
-        std::cerr << "Only 2 cams max" << std::endl;
-        assert(cam_nb <= 2);
-    }
-    for (int i = 0; i < cam_nb; i++) {
-        info.rtsp_urls[i] = rtsp_urls[i];
-        info.rtsp_titles[i] = "Camera " + std::to_string(i);
-    }
 
     for (int i = 0; i < cam_nb; i++) {
         readers[i] = std::make_unique<Reader>();
-        // ret = readers[i]->open(rtsp_urls[i], true);
-        ret = readers[i]->open(rtsp_urls[i]);
+        ret = readers[i]->open(rtsp_urls[i], true);
+        // ret = readers[i]->open(rtsp_urls[i]);
 
         if (ret != 0) {
             std::cerr << "Init cam false: " << rtsp_urls[i] << std::endl;
@@ -40,8 +35,7 @@ int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
         }
     }
 
-    const char* model_path = "../model/yolov8.rknn";
-    // const char* model_path = "../model/yolo11n_plate_int8_3566_optimize.rknn";
+    std::string model_path = "../model/yolo11n_quantization_no_postprocessing.rknn";
     threadNum = 4;
     pool = std::make_unique<rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>>(model_path, threadNum);
     if (pool->init() != 0) {
@@ -52,6 +46,12 @@ int Pipeline::initialize(const std::vector<std::string>& rtsp_urls) {
     for (int i = 0; i < cam_nb; i++) {
         trackers[i] = std::make_unique<Tracking>();
     }
+
+    stream = std::make_unique<Stream>();
+    stream->startWebServer(8080);
+
+    message = std::make_unique<Message>("tcp://127.0.0.1:1883", "rockchip_3566");
+    message->connect();
 
     std::cout << "Init success" << std::endl;
     return 0;
@@ -99,8 +99,7 @@ void Pipeline::decodeLoop(int id) {
     while (is_system_running) {
         if (!is_camera_running[id]) {
             std::cout << "Retry connect" << info.rtsp_urls[id] << std::endl;
-            ret = readers[id]->open(info.rtsp_urls[id]);
-            // ret = readers[id]->open(info.rtsp_urls[id], false);
+            ret = readers[id]->open(info.rtsp_urls[id], true);
             if (ret != 0) {
                 if (readers[id]->isOpened) {
                     is_camera_running[id].store(true);
@@ -129,7 +128,6 @@ void Pipeline::decodeLoop(int id) {
             
             if (!frame.empty()) {
                 std::time_t t_current = std::chrono::system_clock::to_time_t(capture_time);
-                // std::cout << "T current decode: " << std::put_time(std::localtime(&t_current), "%Y-%m-%d %H:%M:%S") << std::endl;
                 FrameWithMetadata frame_data(std::move(frame), capture_time, id);
                 ret = pool->put(std::move(frame_data));
                 if (ret != 0) {
@@ -168,13 +166,7 @@ void Pipeline::detectPoolLoop() {
         }
         InferenceToTrack data(std::move(result.original_frame), result.capture_time, std::move(result.detections));
         inference_to_track_queues[result.camera_id].push(std::move(data));
-        std::cout << "size: " << result.detections.size() << "at: " << result.camera_id << std::endl;
-        for (const auto& det : result.detections) {
-            std::cout << "box: " << det.box << " "
-                    << "confidence: " << det.confidence << " "
-                    << "class_id: " << det.class_id << std::endl;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
         
     }    
     std::cout << "Detection pool thread stop" << std::endl;
@@ -197,13 +189,18 @@ void Pipeline::trackLoop(int id) {
         std::chrono::system_clock::time_point capture_time = data_ptr->capture_time;
         std::vector<Detection> detections = data_ptr->detections;
         
-        auto start = std::chrono::steady_clock::now();
         trackers[id]->run(frame, detections);
         trackers[id]->draw_tracks(frame);
-        auto end = std::chrono::steady_clock::now();
-        
-        std::chrono::duration<double, std::milli> elapsed = end - start;
-        std::cout << "Tracking results for camera " << id << ": " << elapsed.count() << " ms" << std::endl;
+
+        auto plates = trackers[id]->getPlates();
+        for (const auto& plate : plates) {
+            cv::Rect img_rect(0, 0, frame.cols, frame.rows);
+            cv::Rect valid_plate = plate & img_rect;
+            if (valid_plate.width > 0 && valid_plate.height > 0) {
+                cv::Mat plate_img = frame(valid_plate);
+                // message->sendMessage(capture_time, id, plate_img);
+            }
+        }
 
         TrackToOSD data(std::move(frame), capture_time);
         track_to_osd_queues[id].push(std::move(data));
@@ -218,25 +215,17 @@ void Pipeline::displayLoop() {
     std::chrono::system_clock::time_point Tcurrent;
     bool any_camera_running = false;
     
-    // Initialize OSD with web server
-    // std::unique_ptr<OSD> osd = std::make_unique<OSD>();
-    // osd->startWebServer(8080);
-    
     while (is_system_running) {
         any_camera_running = false;
-        // std::array<bool, 2> camera_status = {false, false};
         
         for (int i = 0; i < is_camera_running.size(); i++) {
             if (is_camera_running[i]) {
                 any_camera_running = true;
-                // camera_status[i] = true;
             }
         }
         
         if (!any_camera_running) {
-            // Update with offline status
-            // osd->updateFrames(frames, camera_status);
-            // std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
             continue;
         }
 
@@ -253,28 +242,15 @@ void Pipeline::displayLoop() {
             
             frames[i] = data_ptr->processed_frame;
             Tcapture[i] = data_ptr->capture_time;
-            Tcurrent = std::chrono::system_clock::now();            
+            Tcurrent = std::chrono::system_clock::now();         
+
             std::chrono::duration<double, std::milli> latency = Tcurrent - Tcapture[i];
             std::cout << "Latency for camera " << i << ": " << latency.count() << " ms" << std::endl;
+            
+            stream->updateFrame(frames[i], i);
 
-            // Print Tcurrent and Tcapture[i] in readable format
-            // std::time_t t_capture = std::chrono::system_clock::to_time_t(Tcapture[i]);
-            // std::time_t t_current = std::chrono::system_clock::to_time_t(Tcurrent);
-            // std::cout << "Tcapture[" << i << "]: " << std::put_time(std::localtime(&t_capture), "%Y-%m-%d %H:%M:%S") << std::endl;
-            // std::cout << "Tcurrent at display: " << std::put_time(std::localtime(&t_current), "%Y-%m-%d %H:%M:%S") << std::endl;
         }
-        if (!frames[0].empty()) {
-            cv::imshow("OSD", frames[0]);
-            if (cv::waitKey(1) >= 0) {
-                break;
-            }
-        }
-
-        // // Update frames to web server
-        // osd->updateFrames(frames, camera_status);
     }
-    cv::destroyAllWindows();
-    // osd->stopWebServer();
     std::cout << "Display thread stopped." << std::endl;
     return;
 }

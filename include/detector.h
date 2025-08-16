@@ -86,14 +86,19 @@ public:
     rknn_context *get_pctx();
     DetectionWithMetadata infer_meta(FrameWithMetadata input_data) {
         std::vector<Detection> detections = this->infer(input_data.frame); // Call existing infer
-        return DetectionWithMetadata(std::move(detections), input_data.capture_time, 
-                                   input_data.camera_id, std::move(input_data.frame));
+        std::vector<Detection> filtered_detections = this->plateFilter(input_data.frame, detections);
+        detections = std::move(filtered_detections);
+        // this->draw(input_data.frame, detections);
+        return DetectionWithMetadata(std::move(detections), input_data.capture_time,
+                                      input_data.camera_id, std::move(input_data.frame));
     }
     std::vector<Detection> infer(cv::Mat &ori_img);
     void draw(cv::Mat &ori_img, const std::vector<Detection> &detections);
     object_detect_result_list*  od_results;
     static std::mutex resize_mutex;
-    
+
+    std::vector<Detection> plateFilter(cv::Mat& ori_img, const std::vector<Detection>& detections);
+
 private:
     int ret;
     std::string model_path;
@@ -109,7 +114,7 @@ private:
     int img_width, img_height;
 
     float nms_threshold {0.5};
-    float box_conf_threshold {0.2};
+    float box_conf_threshold {0.1};
     // std::vector<std::string> classes{"person", "bicycle", "car", "motorcycle", "airplane", "bus", "train", "truck", "boat", "traffic light", "fire hydrant", "stop sign", "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella", "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard", "sports ball", "kite", "baseball bat", "baseball glove", "skateboard", "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork", "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange", "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair", "couch", "potted plant", "bed", "dining table", "toilet", "tv", "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave", "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase", "scissors", "teddy bear", "hair drier", "toothbrush"};
     std::vector<std::string> classes{"plate"};
 

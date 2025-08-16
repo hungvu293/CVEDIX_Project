@@ -3,13 +3,13 @@
 #include <opencv2/opencv.hpp>
 
 extern "C" {
-#include <libavformat/avformat.h>
-#include <libavcodec/avcodec.h>
-#include <libavutil/opt.h>
-#include <libavutil/error.h>
-#include <libavutil/imgutils.h>
-#include <libavutil/hwcontext.h>
-#include <libswscale/swscale.h>
+#include <dev/ffmpeg/libavformat/avformat.h>
+#include <dev/ffmpeg/libavcodec/avcodec.h>
+#include <dev/ffmpeg/libavutil/opt.h>
+#include <dev/ffmpeg/libavutil/error.h>
+#include <dev/ffmpeg/libavutil/imgutils.h>
+#include <dev/ffmpeg/libavutil/hwcontext.h>
+#include <dev/ffmpeg/libswscale/swscale.h>
 }
 
 #include "im2d.h"

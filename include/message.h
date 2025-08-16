@@ -3,6 +3,7 @@
 
 #include <string>
 #include <chrono>
+#include <mutex>
 #include <opencv2/opencv.hpp>
 #include <mqtt/async_client.h>
 
@@ -25,6 +26,8 @@ private:
     mqtt::connect_options connOpts;
     std::string topic = "data/plates";
     const int QOS = 1;
+
+    std::mutex sendMutex;
 };
 
 #endif // MESSAGE_H

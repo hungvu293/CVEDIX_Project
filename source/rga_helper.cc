@@ -47,62 +47,101 @@ int rga_cvt_color(AVFrame* src_frame, cv::Mat& dst_mat) {
     std::lock_guard<std::mutex> lock(rgaMutex);
 
     int ret = 0;
+    int src_width, src_height, src_format;
+    int dst_width, dst_height, dst_format;
+    char *src_buf, *dst_buf;
+    int src_buf_size, dst_buf_size;
+
     rga_buffer_t src_img, dst_img;
     rga_buffer_handle_t src_handle, dst_handle;
 
     memset(&src_img, 0, sizeof(src_img));
     memset(&dst_img, 0, sizeof(dst_img));
 
-    int src_w = src_frame->width;
-    int src_h = src_frame->height;
-    RgaSURF_FORMAT src_fmt;
+    src_width = src_frame->width;
+    src_height = src_frame->height;
+    src_format = RK_FORMAT_YCbCr_420_SP; // Assuming NV12 format
 
-    switch (src_frame->format) {
-        case AV_PIX_FMT_NV12:
-            src_fmt = RK_FORMAT_YCbCr_420_SP;
-            break;
-        case AV_PIX_FMT_YUV420P:
-            src_fmt = RK_FORMAT_YCbCr_420_P;
-            break;
-        default:
-            fprintf(stderr, "RGA unsupported source format: %d\n", src_frame->format);
-            return -1;
+    if (src_width == 0 || src_height == 0) {
+        fprintf(stderr, "Invalid source image dimensions!\n");
+        if (src_handle) releasebuffer_handle(src_handle);
+        if (dst_handle) releasebuffer_handle(dst_handle);
+        if (src_buf) free(src_buf);
+        if (dst_buf) free(dst_buf);
+        return -1;
     }
 
-    int dst_w = src_w;
-    int dst_h = src_h;
-    RgaSURF_FORMAT dst_fmt = RK_FORMAT_RGB_888;
+    dst_width = src_width;
+    dst_height = src_height;
+    dst_format = RK_FORMAT_RGB_888; // Convert to RGB format
 
-    dst_mat.create(dst_h, dst_w, CV_8UC3);
+    src_buf_size = src_width * src_height * get_bpp_from_format(src_format);
+    dst_buf_size = dst_width * dst_height * get_bpp_from_format(dst_format);
 
-    src_handle = importbuffer_virtualaddr(src_frame->data[0], src_frame->linesize[0] * src_frame->height * 3 / 2);
-    dst_handle = importbuffer_virtualaddr(dst_mat.data, dst_mat.total() * dst_mat.elemSize());
+    src_buf = (char *)malloc(src_buf_size);
+    dst_buf = (char *)malloc(dst_buf_size);
 
+    if (src_frame->format == AV_PIX_FMT_NV12) {
+        // Copy Y plane
+        for (int i = 0; i < src_height; i++) {
+            memcpy(src_buf + i * src_width, src_frame->data[0] + i * src_frame->linesize[0], src_width);
+        }
+        // Copy UV plane
+        for (int i = 0; i < src_height / 2; i++) {
+            memcpy(src_buf + src_width * src_height + i * src_width, 
+                   src_frame->data[1] + i * src_frame->linesize[1], src_width);
+        }
+    } else {
+        printf("Unsupported AVFrame format!\n");
+        if (src_handle) releasebuffer_handle(src_handle);
+        if (dst_handle) releasebuffer_handle(dst_handle);
+        if (src_buf) free(src_buf);
+        if (dst_buf) free(dst_buf);
+        ret = -1;
+    }
+    memset(dst_buf, 0x80, dst_buf_size);
+    dst_mat.create(dst_height, dst_width, CV_8UC3);
+
+    src_handle = importbuffer_virtualaddr(src_buf, src_buf_size);
+    dst_handle = importbuffer_virtualaddr(dst_buf, dst_buf_size);
     if (src_handle == 0 || dst_handle == 0) {
         printf("importbuffer failed!\n");
         if (src_handle) releasebuffer_handle(src_handle);
         if (dst_handle) releasebuffer_handle(dst_handle);
+        if (src_buf) free(src_buf);
+        if (dst_buf) free(dst_buf);
         return -1;
     }
 
-    src_img = wrapbuffer_handle(src_handle, src_w, src_h, src_fmt);
-    dst_img = wrapbuffer_handle(dst_handle, dst_w, dst_h, dst_fmt);
+    src_img = wrapbuffer_handle(src_handle, src_width, src_height, src_format);
+    dst_img = wrapbuffer_handle(dst_handle, dst_width, dst_height, dst_format);
 
     ret = imcheck(src_img, dst_img, {}, {});
     if (IM_STATUS_NOERROR != ret) {
         printf("%d, check error! %s", __LINE__, imStrError((IM_STATUS)ret));
-        releasebuffer_handle(src_handle);
-        releasebuffer_handle(dst_handle);
+        if (src_handle) releasebuffer_handle(src_handle);
+        if (dst_handle) releasebuffer_handle(dst_handle);
+        if (src_buf) free(src_buf);
+        if (dst_buf) free(dst_buf);
         return -1;
     }
 
-    ret = imcvtcolor(src_img, dst_img, src_fmt, dst_fmt);
+    ret = imcvtcolor(src_img, dst_img, src_format, dst_format);
     if (ret != IM_STATUS_SUCCESS) {
         printf("imcvtcolor failed: %s\n", imStrError((IM_STATUS)ret));
+        if (src_handle) releasebuffer_handle(src_handle);
+        if (dst_handle) releasebuffer_handle(dst_handle);
+        if (src_buf) free(src_buf);
+        if (dst_buf) free(dst_buf);
+        return -1;
     }
 
-    releasebuffer_handle(src_handle);
-    releasebuffer_handle(dst_handle);
+    memcpy(dst_mat.data, dst_buf, dst_buf_size);
+
+    if (src_handle) releasebuffer_handle(src_handle);
+    if (dst_handle) releasebuffer_handle(dst_handle);
+    if (src_buf) free(src_buf);
+    if (dst_buf) free(dst_buf);
 
     return (ret == IM_STATUS_SUCCESS) ? 0 : -1;
 }
