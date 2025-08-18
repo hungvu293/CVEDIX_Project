@@ -87,8 +87,8 @@ public:
     DetectionWithMetadata infer_meta(FrameWithMetadata input_data) {
         std::vector<Detection> detections = this->infer(input_data.frame); // Call existing infer
         std::vector<Detection> filtered_detections = this->plateFilter(input_data.frame, detections);
+        this->draw(input_data.frame, detections);
         detections = std::move(filtered_detections);
-        // this->draw(input_data.frame, detections);
         return DetectionWithMetadata(std::move(detections), input_data.capture_time,
                                       input_data.camera_id, std::move(input_data.frame));
     }

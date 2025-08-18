@@ -348,10 +348,10 @@ void Detector::draw(cv::Mat &ori_img, const std::vector<Detection> &detections) 
         cv::rectangle(ori_img, det.box, det.color, 2);
         std::string label = det.className + ": " + std::to_string(det.confidence);
         cv::putText(ori_img, label, cv::Point(det.box.x, det.box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, det.color, 2);
-        std::cout << "size: " << detections.size() << std::endl;
-        std::cout << "box" << det.box << " "
-                  << "confidence: " << det.confidence << " "
-                  << "class_id: " << det.class_id << std::endl;
+        // std::cout << "size: " << detections.size() << std::endl;
+        // std::cout << "box" << det.box << " "
+        //           << "confidence: " << det.confidence << " "
+        //           << "class_id: " << det.class_id << std::endl;
     }
     // printf("[LOG] Detector::draw - Drawing finished\n");
 }

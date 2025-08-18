@@ -21,7 +21,7 @@ void producer(Reader& reader, rknnPool<Detector, FrameWithMetadata, DetectionWit
         cv::Mat frame;
         if (reader.decodeFrame(frame) != 0) {
             std::cout << "Producer " << reader_id << " stream ended or error." << std::endl;
-            break; // Stream kết thúc hoặc lỗi
+            break; 
         }
         if (frame.empty()) {
             continue;
@@ -39,17 +39,10 @@ void consumer(rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>& pool
     while (!done) {
         DetectionWithMetadata result;
         if (pool.get(result) == 0) {
-            // for (const auto& det : filtered_detections) {
-            //     cv::rectangle(result.original_frame, det.box, det.color, 2);
-            //     std::string label = det.className + ": " + std::to_string(det.confidence);
-            //     cv::putText(result.original_frame, label, cv::Point(det.box.x, det.box.y - 5), cv::FONT_HERSHEY_SIMPLEX, 0.5, det.color, 2);
-            // }
-
             if (result.camera_id == 0) {
                 tracker0.run(result.original_frame, result.detections);
                 std::vector<cv::Rect> plates0 = tracker0.getPlates();
                 for (const auto& plate : plates0) {
-                    // Ensure the plate rectangle is within the frame boundaries before cropping
                     cv::Rect img_rect(0, 0, result.original_frame.cols, result.original_frame.rows);
                     cv::Rect valid_plate = plate & img_rect;
                     if (valid_plate.width > 0 && valid_plate.height > 0) {
@@ -60,12 +53,14 @@ void consumer(rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>& pool
                 tracker0.draw_tracks(result.original_frame);
                 stream.updateFrame(result.original_frame, 0);
                 // server.encodeFrame(result.original_frame);
+                auto current_time = std::chrono::system_clock::now();   
+                std::chrono::duration<double, std::milli> latency = current_time - result.capture_time;
+                std::cout << "Latency for camera " << result.camera_id << ": " << latency.count() << " ms" << std::endl;
             }
             else if (result.camera_id == 1) {
                 tracker1.run(result.original_frame, result.detections);
                 std::vector<cv::Rect> plates1 = tracker1.getPlates();
                 for (const auto& plate : plates1) {
-                    // Ensure the plate rectangle is within the frame boundaries before cropping
                     cv::Rect img_rect(0, 0, result.original_frame.cols, result.original_frame.rows);
                     cv::Rect valid_plate = plate & img_rect;
                     if (valid_plate.width > 0 && valid_plate.height > 0) {
@@ -75,6 +70,9 @@ void consumer(rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>& pool
                 }
                 tracker1.draw_tracks(result.original_frame);
                 stream.updateFrame(result.original_frame, 1);
+                auto current_time = std::chrono::system_clock::now();   
+                std::chrono::duration<double, std::milli> latency = current_time - result.capture_time;
+                std::cout << "Latency for camera " << result.camera_id << ": " << latency.count() << " ms" << std::endl;
             }
 
             if (cv::waitKey(1) >= 0) {
@@ -83,7 +81,6 @@ void consumer(rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>& pool
             }
 
         } else {
-            // Hàng đợi rỗng, chờ một chút trước khi thử lại
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
             if (done) break;
         }
@@ -99,14 +96,11 @@ void handle_input(std::atomic<bool>& done) {
 }
 
 int main() {
-    // Tạo 2 Reader objects
     Reader reader0, reader1;
     
-    // std::string input0 = "rtsp://user03:abcd1234@113.177.128.13:8159";
-    std::string input0 = "rtsp://user03:abcd1234@113.177.126.32:8153";
-    std::string input1 = "rtsp://user03:abcd1234@113.177.126.32:8153";
+    std::string input0 = "rtsp://user03:abcd1234@113.177.126.84:8202";
+    std::string input1 = "rtsp://user03:abcd1234@113.177.126.84:8202";
     
-    // Mở cả 2 streams
     if (reader0.open(input0, true) != 0) {
         std::cerr << "Failed to open input0: " << input0 << std::endl;
         return -1;
@@ -118,9 +112,8 @@ int main() {
         return -1;
     }
 
-    // std::string model_path = "../model/yolo11n_plate_int8_3566_optimize.rknn";
     std::string model_path = "../model/yolo11n_quantization_no_postprocessing.rknn";
-    // std::string model_path = "../model/yolov8.rknn";
+
     int threadNum = 4;
     rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata> pool(model_path, threadNum);
     if (pool.init() != 0) {
@@ -130,7 +123,7 @@ int main() {
     std::cout << "rknnPool initialized successfully with " << threadNum << " threads." << std::endl;
 
     Tracking tracker0, tracker1;
-    Stream stream; // MJPEG Stream
+    Stream stream;
     stream.startWebServer(8080); 
 
     OSD osd;
@@ -138,7 +131,7 @@ int main() {
     Message message_client("tcp://localhost:1883", "rockchip_3566");
     message_client.connect();
 
-    Server server; // RTSP Server
+    Server server;
     // std::string rtsp_url = "rtsp://103.147.186.216:20990/livestream/00_11_22_33_44/index.rtsp?username=1124a9a7183d0257842986fe3e83fc21&time=UTC&key=&token=";
     // if (server.open(rtsp_url, 1600, 1200, 6, false) != 0) {
     //     std::cerr << "Failed to open RTSP server" << std::endl;
@@ -146,27 +139,22 @@ int main() {
     
     std::atomic<bool> done(false);
 
-    // Luồng riêng để xử lý input
     std::thread input_thread(handle_input, std::ref(done));
 
-    // Khởi chạy 2 luồng producer và 1 luồng consumer
     std::thread producer_thread0(producer, std::ref(reader0), std::ref(pool), std::ref(done), 0);
     std::thread producer_thread1(producer, std::ref(reader1), std::ref(pool), std::ref(done), 1);
     std::thread consumer_thread(consumer, std::ref(pool), std::ref(tracker0), std::ref(tracker1), std::ref(stream), std::ref(osd), std::ref(server), std::ref(message_client), std::ref(done));
 
-    // Chờ các luồng hoàn thành
     producer_thread0.join();
     producer_thread1.join();
     consumer_thread.join();
 
-    // Đảm bảo luồng input cũng kết thúc
     input_thread.join();
 
-    // Đảm bảo đóng các readers
     reader0.close();
     reader1.close();
 
-    stream.stopWebServer(); // Dừng server
+    stream.stopWebServer(); 
     message_client.disconnect();
     server.close();
     osd.release();

@@ -111,7 +111,7 @@ void Message::sendMessage(const std::chrono::system_clock::time_point& capture_t
 
     // 5. Publish message
     try {
-        std::cout << "send msg" << std::endl;
+        // std::cout << "send msg" << std::endl;
         mqtt::message_ptr pubmsg = mqtt::make_message(topic, payload);
         pubmsg->set_qos(QOS);
         client.publish(pubmsg);

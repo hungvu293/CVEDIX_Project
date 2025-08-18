@@ -3,7 +3,9 @@
 
 #include "opencv2/opencv.hpp"
 
-#include "OCSort.hpp"
+// #include "OCSort.hpp"
+#include "BYTETracker.h"
+
 #include "detector.h"
 
 #include <vector>
@@ -12,14 +14,17 @@
 
 class Tracking {
 public:
-    Tracking(float det_thresh_ = 0.3f, int max_age_ = 3, int min_hits_ = 1, float iou_threshold_ = 0.05f,
-             int delta_t_ = 3, std::string asso_func_ = "iou", float inertia_ = 0.2f, bool use_byte_ = false);
+    // Tracking(float det_thresh_ = 0.3f, int max_age_ = 3, int min_hits_ = 1, float iou_threshold_ = 0.05f,
+    //          int delta_t_ = 3, std::string asso_func_ = "iou", float inertia_ = 0.2f, bool use_byte_ = false);
+    Tracking();
     ~Tracking();
     void run(cv::Mat& frame, std::vector<Detection>& output);
     void draw_tracks(cv::Mat& frame);
     std::vector<cv::Rect> getPlates();
+    
 private:
-    ocsort::OCSort oc_sort_tracker;
+    // ocsort::OCSort oc_sort_tracker;
+    BYTETracker byte_tracker;
 };
 
 #endif

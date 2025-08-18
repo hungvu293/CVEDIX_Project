@@ -32,7 +32,6 @@ class Pipeline {
 private:
     int threadNum;
 
-    // Object holders
     std::array<std::unique_ptr<Reader>, 2> readers;
     std::unique_ptr<rknnPool<Detector, FrameWithMetadata, DetectionWithMetadata>> pool;
     std::array<std::unique_ptr<Tracking>, 2> trackers;

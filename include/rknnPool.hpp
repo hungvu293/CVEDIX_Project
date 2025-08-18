@@ -85,6 +85,7 @@ int rknnPool<rknnModel, inputType, outputType>::put(inputType inputData)
     std::lock_guard<std::mutex> lock(queueMtx);
     if (futs.size() >= max_queue_size)
     {
+        // std::cout << "Pool size: " << futs.size() << std::endl;
         return 0;
     }
     futs.push(pool->submit(&rknnModel::infer_meta, models[this->getModelId()], inputData));
@@ -97,9 +98,8 @@ int rknnPool<rknnModel, inputType, outputType>::get(outputType &outputData)
     std::future<outputType> fut;
     {
         std::lock_guard<std::mutex> lock(queueMtx);
-        if(futs.empty() == true)
+        if(futs.empty() == true) 
             return -1;
-        std::cout << "Pool size: " << futs.size() << std::endl;
         fut = std::move(futs.front());
         futs.pop();
     }
