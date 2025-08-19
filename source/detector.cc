@@ -363,37 +363,37 @@ std::vector<Detection> Detector::plateFilter(cv::Mat& ori_img, const std::vector
             filtered_detections.push_back(det);
         }
     }
-    for (auto& det : filtered_detections) {
-        float scale_w = 2.0f;
-        float scale_h = 8.0f;
+    // for (auto& det : filtered_detections) {
+    //     float scale_w = 2.0f;
+    //     float scale_h = 8.0f;
 
-        int new_width = static_cast<int>(det.box.width * scale_w);
-        int new_height = static_cast<int>(det.box.height * scale_h);
+    //     int new_width = static_cast<int>(det.box.width * scale_w);
+    //     int new_height = static_cast<int>(det.box.height * scale_h);
 
-        int x1 = det.box.x - (new_width - det.box.width) / 2;
-        int y1 = det.box.y - (new_height - det.box.height) / 2;
-        int x2 = x1 + new_width;
-        int y2 = y1 + new_height;
+    //     int x1 = det.box.x - (new_width - det.box.width) / 2;
+    //     int y1 = det.box.y - (new_height - det.box.height) / 2;
+    //     int x2 = x1 + new_width;
+    //     int y2 = y1 + new_height;
 
-        if (x1 < 0) {
-            new_width = (new_width / 2 + x1) * 2;
-        }
-        if (x2 > ori_img.cols) {
-            new_width = (new_width / 2 - (x2 - ori_img.cols)) * 2;
-        }
-        if (y1 < 0) {
-            new_height = (new_height / 2 + y1) * 2;
-        }
-        if (y2 > ori_img.rows) {
-            new_height = (new_height / 2 - (y2 - ori_img.rows)) * 2;
-        }
+    //     if (x1 < 0) {
+    //         new_width = (new_width / 2 + x1) * 2;
+    //     }
+    //     if (x2 > ori_img.cols) {
+    //         new_width = (new_width / 2 - (x2 - ori_img.cols)) * 2;
+    //     }
+    //     if (y1 < 0) {
+    //         new_height = (new_height / 2 + y1) * 2;
+    //     }
+    //     if (y2 > ori_img.rows) {
+    //         new_height = (new_height / 2 - (y2 - ori_img.rows)) * 2;
+    //     }
 
-        // Adjust x and y to keep the box centered
-        det.box.x -= (new_width - det.box.width) / 2;
-        det.box.y -= (new_height - det.box.height) / 2;
-        det.box.width = new_width;
-        det.box.height = new_height;
-    }
+    //     // Adjust x and y to keep the box centered
+    //     det.box.x -= (new_width - det.box.width) / 2;
+    //     det.box.y -= (new_height - det.box.height) / 2;
+    //     det.box.width = new_width;
+    //     det.box.height = new_height;
+    // }
     return filtered_detections;
 }
 static int process_i8(int8_t *box_tensor, int32_t box_zp, float box_scale,

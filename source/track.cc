@@ -88,7 +88,7 @@ void Tracking::draw_tracks(cv::Mat& frame) {
         // }
         cv::Scalar s = byte_tracker.get_color(tracks[i].track_id);
         putText(frame, format("%d", tracks[i].track_id), Point(tlwh[0], tlwh[1] - 5), 
-                0, 0.6, Scalar(0, 0, 255), 4, LINE_AA);
+                0, 0.6, Scalar(255, 255, 255), 4, LINE_AA);
         rectangle(frame, Rect(tlwh[0], tlwh[1], tlwh[2], tlwh[3]), s, 4);
     }
 
