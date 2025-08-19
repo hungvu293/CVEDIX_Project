@@ -39,6 +39,7 @@ include_directories(
     ${MPP_INCLUDE_DIRS}
     /home/orangepi/CVEDIX_Project/3rdparty/rknpu2/include
     /home/orangepi
+    /home/orangepi/dev/rkrga/samples/utils/allocator/include/
 )
 
 set(PROJECT_SOURCE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/source)
@@ -56,6 +57,7 @@ add_library(project_core_lib STATIC
     ${ALL_SOURCE_FILES}
     # ${OC_SORT_SOURCE_FILES}
     ${BYTE_TRACK_SOURCE_FILES}
+    /home/orangepi/dev/rkrga/samples/utils/allocator/dma_alloc.cpp
 )
 
 target_link_libraries(project_core_lib

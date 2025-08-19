@@ -192,10 +192,10 @@ int Reader::decodeFrame(cv::Mat& outFrame) {
             if (false) {
                 if (rga_cvt_color(convert_src, outFrame) != 0) {
                     fprintf(stderr, "RGA color conversion failed.\n");
-                    av_frame_unref(frame);
-                    av_frame_unref(sw_frame);
-                    av_packet_unref(pkt);
-                    close();
+                    // av_frame_unref(frame);
+                    // av_frame_unref(sw_frame);
+                    // av_packet_unref(pkt);
+                    // close();
                 }
             } else {
                 int src_w = convert_src->width;
